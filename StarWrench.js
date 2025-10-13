@@ -1,0 +1,1281 @@
+// ==UserScript==
+// @name         StarWrench
+// @namespace    http://tampermonkey.net/
+// @version      1.0.0
+// @description  An opinionated and unofficial enhancement suite for StarRez with toggleable features
+// @author       You
+// @match        https://vuw.starrezhousing.com/StarRezWeb/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=starrezhousing.com
+// @grant        none
+// @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/YOUR_USERNAME/starrez-enhancement-suite/main/starrez-enhancement-suite.js
+// @downloadURL  https://raw.githubusercontent.com/YOUR_USERNAME/starrez-enhancement-suite/main/starrez-enhancement-suite.js
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // ================================
+    // CONFIGURATION & CONSTANTS
+    // ================================
+
+    const SUITE_VERSION = '1.0.0';
+    const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
+
+    // Default settings for all plugins
+    const DEFAULT_SETTINGS = {
+        plugins: {
+            bookmarks: {
+                enabled: true,
+                name: '📖 Bookmarks',
+                description: 'Save and organise frequently visited pages with drag-and-drop management'
+            },
+            autoSelect: {
+                enabled: true,
+                name: '🎯 Auto-Select',
+                description: 'Bulk select entries by pasting a list of IDs (works on Main -> Entries page)'
+            },
+            clipboard: {
+                enabled: true,
+                name: '📋 Clipboard Copy',
+                description: 'Copy record IDs from dashboard sections to clipboard for easy export'
+            },
+            dropdown: {
+                enabled: true,
+                name: '🔍 Dropdown Search',
+                description: 'Add search functionality to the Dashboard dropdown menu'
+            },
+            initials: {
+                enabled: true,
+                name: '👤 Initials Expander',
+                description: 'Expands initials in shift and incident reports for easy reading'
+            },
+            phone: {
+                enabled: true,
+                name: '📱 Phone Formatter',
+                description: 'Automatically format phone numbers with proper spacing and grouping'
+            },
+            wordHighlighter: {
+                enabled: false,
+                name: '🖍️ Word Highlighter',
+                description: 'Colour codes your colour codes. Makes "Orange" and "Yellow" appear orange and yellow'
+            },
+            autoLinker: {
+                enabled: true,
+                name: '🔗 Incident Auto Linker',
+                description: 'Automatically converts "incident ######" or "report ######" text into clickable links'
+            }
+        }
+    };
+
+    // ================================
+    // SETTINGS MANAGEMENT
+    // ================================
+
+    let currentSettings = {};
+
+    function loadSettings() {
+        try {
+            const stored = localStorage.getItem(SETTINGS_KEY);
+            currentSettings = stored ? { ...DEFAULT_SETTINGS, ...JSON.parse(stored) } : { ...DEFAULT_SETTINGS };
+        } catch (error) {
+            console.error('Failed to load settings:', error);
+            currentSettings = { ...DEFAULT_SETTINGS };
+        }
+    }
+
+    function saveSettings() {
+        try {
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify(currentSettings));
+        } catch (error) {
+            console.error('Failed to save settings:', error);
+        }
+    }
+
+    function isPluginEnabled(pluginName) {
+        return currentSettings.plugins[pluginName]?.enabled || false;
+    }
+
+
+    // ================================
+    // PLUGIN MANAGER UI
+    // ================================
+
+    function createPluginManagerDropdown(container) {
+        let dropdown = document.getElementById('plugin-manager-dropdown');
+        if (dropdown) {
+            dropdown.remove();
+            return;
+        }
+
+        dropdown = document.createElement('div');
+        dropdown.id = 'plugin-manager-dropdown';
+        dropdown.style.cssText = `
+            position: absolute;
+            top: 50px;
+            right: 10px;
+            z-index: 99999;
+            background: #fff;
+            border: 1px solid #ccc;
+            padding: 15px;
+            width: 350px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            font-family: Arial, sans-serif;
+            max-height: 500px;
+            overflow-y: auto;
+            border-radius: 8px;
+        `;
+
+        // Header
+        const header = document.createElement('div');
+        header.innerHTML = `
+            <h3 style="margin: 0 0 15px 0; padding-bottom: 10px; border-bottom: 1px solid #eee; color: #333;">
+                An opinionated and unofficial enhancement suite v${SUITE_VERSION}
+            </h3>
+        `;
+        dropdown.appendChild(header);
+
+        // Plugin toggles
+        const pluginsContainer = document.createElement('div');
+        Object.entries(currentSettings.plugins).forEach(([key, plugin]) => {
+            const pluginDiv = document.createElement('div');
+            pluginDiv.style.cssText = 'margin-bottom: 15px; padding: 10px; border: 1px solid #e9ecef; border-radius: 6px; background: #f8f9fa;';
+
+            pluginDiv.innerHTML = `
+                <label style="display: flex; align-items: flex-start; cursor: pointer; gap: 8px;">
+                    <input type="checkbox" ${plugin.enabled ? 'checked' : ''} data-plugin="${key}"
+                           style="margin-top: 2px; transform: scale(1.2); flex-shrink: 0;">
+                    <div style="flex: 1;">
+                        <div style="font-size: 14px; font-weight: 500; color: #333; margin-bottom: 4px;">
+                            ${plugin.name}
+                        </div>
+                        <div style="font-size: 12px; color: #666; line-height: 1.4;">
+                            ${plugin.description}
+                        </div>
+                    </div>
+                </label>
+            `;
+
+            const checkbox = pluginDiv.querySelector('input');
+            checkbox.addEventListener('change', (e) => {
+                currentSettings.plugins[key].enabled = e.target.checked;
+                saveSettings();
+
+                if (e.target.checked) {
+                    // Initialize the plugin
+                    initializePlugin(key);
+                    starrez.ui?.ShowAlertMessage?.(`${plugin.name} enabled! Refresh the page for full functionality.`, 'Plugin Enabled');
+                } else {
+                    starrez.ui?.ShowAlertMessage?.(`${plugin.name} disabled! Refresh the page to fully remove functionality.`, 'Plugin Disabled');
+                }
+            });
+
+            pluginsContainer.appendChild(pluginDiv);
+        });
+
+        dropdown.appendChild(pluginsContainer);
+
+        // Footer with reset button
+        const footer = document.createElement('div');
+        footer.style.cssText = 'margin-top: 20px; padding-top: 15px; border-top: 1px solid #eee; text-align: center;';
+        footer.innerHTML = `
+            <button id="reset-settings-btn" style="padding: 10px 20px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                Reset All Settings
+            </button>
+            <div style="margin-top: 10px; font-size: 11px; color: #999;">
+                Updates managed by Tampermonkey
+            </div>
+        `;
+
+        footer.querySelector('#reset-settings-btn').addEventListener('click', () => {
+            if (confirm('Reset all settings to defaults? This will enable all plugins.')) {
+                currentSettings = { ...DEFAULT_SETTINGS };
+                saveSettings();
+                dropdown.remove();
+                createPluginManagerDropdown(container);
+                starrez.ui?.ShowAlertMessage?.('Settings reset to defaults. Refresh the page for changes to take effect.', 'Settings Reset');
+            }
+        });
+
+        dropdown.appendChild(footer);
+        document.body.appendChild(dropdown);
+
+        // Close dropdown when clicking outside
+        setTimeout(() => {
+            const closeOnClickOutside = (e) => {
+                if (!dropdown.contains(e.target)) {
+                    dropdown.remove();
+                    document.removeEventListener('click', closeOnClickOutside);
+                }
+            };
+            document.addEventListener('click', closeOnClickOutside);
+        }, 100);
+    }
+
+    function addPluginManagerButton() {
+        setTimeout(() => {
+            const container = document.querySelector('.habitat-siteheading-buttons');
+            if (container && !document.querySelector('#plugin-manager-button')) {
+                const newButton = document.createElement('habitat-header-button');
+                newButton.setAttribute('aria-label', 'Enhancement Suite');
+                newButton.setAttribute('tooltip', 'Enhancement Suite');
+                newButton.setAttribute('id', 'plugin-manager-button');
+                newButton.setAttribute('icon', 'fa-cogs');
+                newButton.setAttribute('dropdown-heading', 'Enhancement Suite');
+
+                newButton.addEventListener('click', () => {
+                    createPluginManagerDropdown(container);
+                });
+
+                const secondButton = container.children[1];
+                container.insertBefore(newButton, secondButton);
+            }
+        }, 1000);
+    }
+
+    // ================================
+    // PLUGIN IMPLEMENTATIONS
+    // ================================
+
+    // BOOKMARKS PLUGIN
+    function initBookmarksPlugin() {
+        const BOOKMARKS_KEY = 'starrezBookmarks';
+
+        const loadBookmarks = () => JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '[]');
+        const saveBookmarks = (bookmarks) => localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+
+        const parseUrl = (url) => {
+            const urlObj = new URL(url);
+            const hash = urlObj.hash;
+            const pathParts = urlObj.pathname.split('/').filter(p => p);
+
+            if (hash && hash.startsWith('#!')) {
+                return { type: 'shortcode', shortcode: hash.substring(2) };
+            }
+
+            return {
+                type: 'module',
+                module: pathParts[1] || '',
+                submodule: pathParts[2] || ''
+            };
+        };
+
+        const navigateToBookmark = (url) => {
+            const navInfo = parseUrl(url);
+
+            if (navInfo.type === 'shortcode') {
+                starrez.sm.NavigateTo(`#!${navInfo.shortcode}`);
+            } else {
+                if (window.location.hash && window.location.hash.startsWith('#!')) {
+                    starrez.sm.CloseAllDetailScreens().done(() => {
+                        starrez.mm.NavigateTo(navInfo.module, navInfo.submodule);
+                    });
+                } else {
+                    starrez.mm.NavigateTo(navInfo.module, navInfo.submodule);
+                }
+            }
+        };
+
+        const createDropdown = (container, bookmarks) => {
+            let dropdown = document.getElementById('bookmarks-dropdown');
+            if (dropdown) {
+                dropdown.remove();
+                return;
+            }
+
+            dropdown = document.createElement('div');
+            dropdown.id = 'bookmarks-dropdown';
+            dropdown.style.cssText = `
+                position: absolute; top: 50px; right: 10px; z-index: 99999;
+                background: #fff; border: 1px solid #ccc; padding: 10px; width: 400px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-family: Arial, sans-serif;
+                max-height: 400px; overflow-y: auto; border-radius: 8px;
+            `;
+
+            const list = document.createElement('ul');
+            list.style.cssText = 'list-style: none; padding: 0; margin: 0;';
+
+            bookmarks.forEach((bm, index) => {
+                const li = document.createElement('li');
+                li.style.cssText = 'margin-bottom: 10px; display: flex; align-items: center; gap: 5px;';
+                li.draggable = true;
+                li.dataset.index = index;
+
+                // Drag functionality
+                li.addEventListener('dragstart', (e) => {
+                    e.dataTransfer.setData('text/plain', index);
+                    li.style.opacity = '0.5';
+                });
+                li.addEventListener('dragend', () => li.style.opacity = '1');
+                li.addEventListener('dragover', (e) => e.preventDefault());
+                li.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+                    const toIndex = parseInt(li.dataset.index);
+                    if (fromIndex !== toIndex) {
+                        const [movedItem] = bookmarks.splice(fromIndex, 1);
+                        bookmarks.splice(toIndex, 0, movedItem);
+                        saveBookmarks(bookmarks);
+                        createDropdown(container, bookmarks);
+                    }
+                });
+
+                // Drag handle
+                const dragHandle = document.createElement('span');
+                dragHandle.textContent = '☰';
+                dragHandle.style.cssText = 'cursor: grab; font-size: 18px; color: #666; user-select: none;';
+                dragHandle.title = 'Drag to reorder';
+
+                // Bookmark link
+                const link = document.createElement('a');
+                link.href = '#';
+                link.textContent = bm.name;
+                link.style.cssText = 'color: #0077cc; text-decoration: none; cursor: pointer; flex: 1; user-select: none;';
+
+                const handleNavigation = (e) => {
+                    e.preventDefault();
+                    navigateToBookmark(bm.url);
+                    dropdown.remove();
+                };
+                link.addEventListener('click', handleNavigation);
+
+                // Edit button
+                const editBtn = document.createElement('button');
+                editBtn.textContent = '✏️';
+                editBtn.style.cssText = 'background: none; border: none; cursor: pointer; font-size: 16px;';
+                editBtn.onclick = () => {
+                    link.removeEventListener('click', handleNavigation);
+                    link.contentEditable = 'true';
+                    link.style.outline = '1px solid #0077cc';
+                    link.focus();
+                    editBtn.style.display = 'none';
+                    acceptBtn.style.display = 'inline';
+                };
+
+                // Accept button
+                const acceptBtn = document.createElement('button');
+                acceptBtn.textContent = '✓';
+                acceptBtn.style.cssText = 'background: none; border: none; cursor: pointer; font-size: 16px; color: #28a745; display: none;';
+                acceptBtn.onclick = () => {
+                    const newName = link.textContent.trim();
+                    if (newName) {
+                        bookmarks[index].name = newName;
+                        saveBookmarks(bookmarks);
+                    }
+                    link.contentEditable = 'false';
+                    link.style.outline = 'none';
+                    link.addEventListener('click', handleNavigation);
+                    editBtn.style.display = 'inline';
+                    acceptBtn.style.display = 'none';
+                };
+
+                // Delete button
+                const delBtn = document.createElement('button');
+                delBtn.textContent = '🗑️';
+                delBtn.style.cssText = 'background: none; border: none; cursor: pointer; font-size: 16px;';
+                delBtn.onclick = () => {
+                    bookmarks.splice(index, 1);
+                    saveBookmarks(bookmarks);
+                    createDropdown(container, bookmarks);
+                };
+
+                li.append(dragHandle, link, editBtn, acceptBtn, delBtn);
+                list.appendChild(li);
+            });
+
+            const addBtn = document.createElement('button');
+            addBtn.textContent = 'Add Current Page';
+            addBtn.style.cssText = 'margin-top: 10px; padding: 8px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;';
+            addBtn.onclick = () => {
+                bookmarks.push({
+                    name: document.title || 'Untitled',
+                    url: window.location.href
+                });
+                saveBookmarks(bookmarks);
+                createDropdown(container, bookmarks);
+            };
+
+            dropdown.append(list, addBtn);
+            document.body.appendChild(dropdown);
+
+            // Close dropdown when clicking outside
+            setTimeout(() => {
+                const closeOnClickOutside = (e) => {
+                    if (!dropdown.contains(e.target)) {
+                        dropdown.remove();
+                        document.removeEventListener('click', closeOnClickOutside);
+                    }
+                };
+                document.addEventListener('click', closeOnClickOutside);
+            }, 100);
+        };
+
+        // Add bookmarks button
+        setTimeout(() => {
+            const container = document.querySelector('.habitat-siteheading-buttons');
+            if (container && !document.querySelector('#bookmarks-button')) {
+                const newButton = document.createElement('habitat-header-button');
+                newButton.setAttribute('aria-label', 'Bookmarks');
+                newButton.setAttribute('tooltip', 'Bookmarks');
+                newButton.setAttribute('id', 'bookmarks-button');
+                newButton.setAttribute('icon', 'fa-bookmark');
+
+                newButton.addEventListener('click', () => {
+                    createDropdown(container, loadBookmarks());
+                });
+
+                const thirdButton = container.children[2] || container.children[1];
+                container.insertBefore(newButton, thirdButton);
+            }
+        }, 1200);
+    }
+
+    // AUTO-SELECT PLUGIN
+    function initAutoSelectPlugin() {
+        function addAutoSelectButton() {
+            const targetButton = document.querySelector('button[aria-label="Add New Item"].sr_button_module_add');
+            if (!targetButton || document.querySelector('.auto-select')) return;
+
+            const autoSelectButton = document.createElement('habitat-button');
+            autoSelectButton.setAttribute('variant', 'primary');
+            autoSelectButton.setAttribute('compact', '');
+            autoSelectButton.className = 'ui-order-tabs-button auto-select';
+            autoSelectButton.style.cssText = 'top: 0; margin: 0;';
+
+            const icon = document.createElement('habitat-fa-icon');
+            icon.setAttribute('variant', 'fa-check');
+            autoSelectButton.appendChild(icon);
+            autoSelectButton.appendChild(document.createTextNode('Auto Select'));
+
+            autoSelectButton.addEventListener('click', () => {
+                const userInput = prompt("Enter IDs to auto-select (separated by newlines, spaces, or tabs):");
+                if (!userInput?.trim()) return;
+
+                const idArray = userInput.split(/[\n\s\t]+/).map(id => id.trim()).filter(id => id.length > 0);
+                if (idArray.length === 0) {
+                    alert('No valid IDs found.');
+                    return;
+                }
+
+                const directoryGrid = document.querySelector('.directory-grid.ui-directory-grid');
+                if (!directoryGrid) {
+                    alert('Directory grid not found.');
+                    return;
+                }
+
+                const allRows = directoryGrid.querySelectorAll('tr[data-id]');
+                const clickedIds = [];
+                const notFoundIds = [...idArray];
+
+                allRows.forEach(row => {
+                    const rowId = row.getAttribute('data-id');
+                    if (idArray.includes(rowId)) {
+                        const checkbox = row.querySelector('td.tick-cell input[type="checkbox"]');
+                        if (checkbox && !checkbox.checked) {
+                            checkbox.click();
+                        }
+                        clickedIds.push(rowId);
+                        const index = notFoundIds.indexOf(rowId);
+                        if (index > -1) notFoundIds.splice(index, 1);
+                    }
+                });
+
+                let message = `Auto-select completed!\nSelected: ${clickedIds.length} items\n`;
+                if (notFoundIds.length > 0) {
+                    message += `\nNot found: ${notFoundIds.length <= 20 ? notFoundIds.join(', ') : notFoundIds.length + ' items'}`;
+                }
+                alert(message);
+            });
+
+            targetButton.parentNode.insertBefore(autoSelectButton, targetButton.nextSibling);
+        }
+
+        function checkAndAddButton() {
+            if (document.title === "Entries") {
+                addAutoSelectButton();
+            }
+        }
+
+        checkAndAddButton();
+
+        // Monitor for page changes
+        let lastTitle = document.title;
+        const observer = new MutationObserver(() => {
+            if (document.title !== lastTitle) {
+                lastTitle = document.title;
+                setTimeout(checkAndAddButton, 500);
+            }
+        });
+        observer.observe(document.querySelector('title') || document.head, { childList: true, characterData: true, subtree: true });
+    }
+
+    // CLIPBOARD PLUGIN
+    function initClipboardPlugin() {
+        function getRecordCountFromFooter(dashboardItem) {
+            const footer = dashboardItem.querySelector('.dashboard-footer.ui-dashboard-footer');
+            if (!footer || window.getComputedStyle(footer).display === 'none') {
+                return 0;
+            }
+            const match = footer.textContent.match(/Records:\s*(\d+)/);
+            return match ? parseInt(match[1], 10) : null;
+        }
+
+        function getRecordIdsFromDashboard(dashboardItem) {
+            const rows = dashboardItem.querySelectorAll('tr[data-recordid]');
+            return Array.from(rows).map(row => row.getAttribute('data-recordid')).filter(id => id);
+        }
+
+        async function copyToClipboard(text) {
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                } else {
+                    const textArea = document.createElement('textarea');
+                    textArea.value = text;
+                    textArea.style.cssText = 'position: fixed; left: -999999px; top: -999999px;';
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    const successful = document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    return successful;
+                }
+            } catch (err) {
+                return false;
+            }
+        }
+
+        async function handleClipboardClick(dashboardItem) {
+            const footerCount = getRecordCountFromFooter(dashboardItem);
+            if (footerCount === 0) {
+                alert('No data available to copy.');
+                return;
+            }
+            if (footerCount === null) {
+                alert('Could not determine record count.');
+                return;
+            }
+
+            const recordIds = getRecordIdsFromDashboard(dashboardItem);
+            if (recordIds.length === 0) {
+                alert('No record IDs found.');
+                return;
+            }
+
+            const idsText = recordIds.join('\n');
+            const success = await copyToClipboard(idsText);
+
+            if (success) {
+                alert(`Successfully copied ${recordIds.length} record IDs to clipboard! (Expected: ${footerCount})`);
+            } else {
+                alert(`Failed to copy. Found ${recordIds.length} IDs (Expected: ${footerCount}):\n\n${idsText}`);
+            }
+        }
+
+        function addClipboardButton(dashboardItem) {
+            if (dashboardItem.querySelector('.clipboard-copy-btn')) return;
+
+            const titleOptions = dashboardItem.querySelector('.dashboard-item-title-options');
+            if (!titleOptions) return;
+
+            const button = document.createElement('button');
+            button.className = 'sr_button_icon sr_button clipboard-copy-btn';
+            button.title = 'Copy Record IDs to Clipboard';
+            button.innerHTML = '<i class="fa fa-clipboard"></i>';
+            button.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleClipboardClick(dashboardItem);
+            });
+
+            titleOptions.insertBefore(button, titleOptions.firstChild);
+        }
+
+        function processAllDashboardItems() {
+            document.querySelectorAll('.dashboard-item').forEach(addClipboardButton);
+        }
+
+        setTimeout(processAllDashboardItems, 1000);
+
+        // Monitor for changes
+        let currentUrl = window.location.href;
+        setInterval(() => {
+            if (window.location.href !== currentUrl) {
+                currentUrl = window.location.href;
+                setTimeout(processAllDashboardItems, 1000);
+            }
+        }, 2000);
+    }
+
+    // DROPDOWN SEARCH PLUGIN
+    function initDropdownPlugin() {
+        const PROCESSED_ATTRIBUTE = 'data-search-filter-added';
+
+        function addSearchToDropdown(dropdown) {
+            if (dropdown.hasAttribute(PROCESSED_ATTRIBUTE)) return;
+
+            const searchInput = document.createElement('input');
+            searchInput.className = 'input search-filter-input';
+            searchInput.type = 'text';
+            searchInput.placeholder = 'Search';
+            searchInput.style.cssText = `
+                width: 100%; position: sticky; top: 0; padding: 1em 0.4em;
+                border: none; border-bottom: 1px solid #d0d0d0; text-indent: 1em;
+                font-size: 1.2em; z-index: 9999;
+            `;
+            searchInput.onclick = (e) => e.stopPropagation();
+
+            searchInput.addEventListener('input', function() {
+                const filterText = this.value.toLowerCase();
+                dropdown.querySelectorAll('ul li').forEach(item => {
+                    item.style.display = item.textContent.toLowerCase().includes(filterText) ? '' : 'none';
+                });
+            });
+
+            dropdown.insertBefore(searchInput, dropdown.firstChild);
+            dropdown.setAttribute(PROCESSED_ATTRIBUTE, 'true');
+            setTimeout(() => searchInput.focus(), 50);
+        }
+
+        function scanForDropdowns() {
+            document.querySelectorAll('.ui-submodules-more-dropdown.srw_subModuleTabs_more_dropdown').forEach(dropdown => {
+                if (!dropdown.hasAttribute(PROCESSED_ATTRIBUTE)) {
+                    addSearchToDropdown(dropdown);
+                } else if (!dropdown.classList.contains('hidden')) {
+                    const searchInput = dropdown.querySelector('.search-filter-input');
+                    if (searchInput) setTimeout(() => searchInput.focus(), 50);
+                }
+            });
+        }
+
+        function setupMoreButtonListeners() {
+            document.querySelectorAll('.srw_subModuleTabs_more, .srw_subModuleTabs_more_button, .ui-sub-module-more-group-button').forEach(button => {
+                if (!button.hasAttribute('data-filter-listener')) {
+                    button.addEventListener('click', () => setTimeout(scanForDropdowns, 200));
+                    button.setAttribute('data-filter-listener', 'true');
+                }
+            });
+        }
+
+        setTimeout(() => {
+            setupMoreButtonListeners();
+            scanForDropdowns();
+        }, 1500);
+
+        // Monitor for changes
+        const observer = new MutationObserver(() => {
+            setupMoreButtonListeners();
+            scanForDropdowns();
+        });
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    }
+
+    // INITIALS HIGHLIGHTER PLUGIN
+    function initInitialsPlugin() {
+        let processingInProgress = false;
+        let nameCache = {};
+
+        const styles = document.createElement('style');
+        styles.textContent = `
+            .initials-name {
+                color: #666; font-size: 0.9em; opacity: 0.7; font-style: italic;
+                margin-left: 2px; user-select: none;
+            }
+        `;
+        document.head.appendChild(styles);
+
+        function extractNamesFromParticipants() {
+            const names = {};
+            document.querySelectorAll('table.viewdefault').forEach(table => {
+                const fieldsetBlock = table.closest('.fieldset-block');
+                if (!fieldsetBlock) return;
+
+                const caption = fieldsetBlock.querySelector('.caption');
+                if (!caption || !caption.textContent.includes('Participants')) return;
+
+                table.querySelectorAll('tbody tr').forEach(row => {
+                    const nameCell = row.querySelector('.incidententryid span.field');
+                    if (!nameCell) return;
+
+                    const fullText = nameCell.textContent.trim();
+                    const match = fullText.match(/^[A-Z]+:\s*([^,]+),\s*([^(]+)(?:\(([^)]+)\))?/);
+
+                    if (match) {
+                        const lastName = match[1].trim();
+                        const firstNames = match[2].trim();
+                        const preferredName = match[3] ? match[3].trim() : '';
+                        const firstNameParts = firstNames.split(/\s+/);
+                        const primaryName = preferredName || firstNameParts[0];
+                        const lastInitial = lastName.charAt(0).toUpperCase();
+                        const firstInitial = primaryName.charAt(0).toUpperCase();
+
+                        names[firstInitial + lastInitial] = `${primaryName} ${lastName}`;
+
+                        if (firstNameParts.length > 1) {
+                            let fullInitials = '';
+                            firstNameParts.forEach(name => fullInitials += name.charAt(0).toUpperCase());
+                            fullInitials += lastInitial;
+                            names[fullInitials] = `${firstNames} ${lastName}`;
+                        }
+                    }
+                });
+            });
+            return names;
+        }
+
+        function shouldSkipNode(node) {
+            let parent = node.parentNode;
+            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
+                const tagName = parent.tagName.toLowerCase();
+                if (tagName === 'input' || tagName === 'select' || tagName === 'textarea') return true;
+                if (parent.classList && parent.classList.contains('initials-highlight')) return true;
+                parent = parent.parentNode;
+            }
+            return false;
+        }
+
+        function processTextNode(textNode, nameMap) {
+            if (shouldSkipNode(textNode)) return false;
+
+            const text = textNode.textContent;
+            let modifiedText = text;
+            let modified = false;
+
+            const sortedInitials = Object.keys(nameMap).sort((a, b) => b.length - a.length);
+
+            for (const initials of sortedInitials) {
+                const fullName = nameMap[initials];
+                const regex = new RegExp(`\\b${initials}\\b(?![a-zA-Z])`, 'g');
+                if (regex.test(modifiedText)) {
+                    modifiedText = modifiedText.replace(regex,
+                        `<span class="initials-highlight" title="${fullName}">${initials}</span><span class="initials-name">(${fullName})</span>`
+                    );
+                    modified = true;
+                }
+            }
+
+            if (modified) {
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = modifiedText;
+                const parent = textNode.parentNode;
+                const fragment = document.createDocumentFragment();
+                while (tempDiv.firstChild) {
+                    fragment.appendChild(tempDiv.firstChild);
+                }
+                parent.replaceChild(fragment, textNode);
+            }
+            return modified;
+        }
+
+        function processDescriptionFields() {
+            if (processingInProgress) return;
+            processingInProgress = true;
+
+            try {
+                const nameMap = extractNamesFromParticipants();
+                if (Object.keys(nameMap).length === 0) {
+                    processingInProgress = false;
+                    return;
+                }
+
+                nameCache = { ...nameCache, ...nameMap };
+
+                document.querySelectorAll('span.field.view-control.textarea .textarea').forEach(field => {
+                    const walker = document.createTreeWalker(
+                        field,
+                        NodeFilter.SHOW_TEXT,
+                        {
+                            acceptNode: (node) => {
+                                if (!node.textContent.trim() || shouldSkipNode(node)) {
+                                    return NodeFilter.FILTER_REJECT;
+                                }
+                                return NodeFilter.FILTER_ACCEPT;
+                            }
+                        }
+                    );
+
+                    const textNodes = [];
+                    let node;
+                    while (node = walker.nextNode()) {
+                        textNodes.push(node);
+                    }
+
+                    textNodes.forEach(textNode => {
+                        if (textNode.parentNode) {
+                            processTextNode(textNode, nameCache);
+                        }
+                    });
+                });
+            } catch (error) {
+                console.error('Error in initials highlighter:', error);
+            }
+
+            processingInProgress = false;
+        }
+
+        setTimeout(processDescriptionFields, 2000);
+        setInterval(processDescriptionFields, 5000);
+
+        const observer = new MutationObserver(() => {
+            setTimeout(processDescriptionFields, 800);
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    // PHONE FORMATTER PLUGIN
+    function initPhonePlugin() {
+        let formattingInProgress = false;
+
+        function formatPhoneNumber(phoneNumber) {
+            const cleaned = phoneNumber.replace(/[^\d+]/g, '');
+            if (cleaned.length < 7) return cleaned;
+
+            if (cleaned.startsWith('+64')) {
+                if (cleaned.length >= 5) {
+                    if (cleaned.charAt(3) === '2') {
+                        const remainingDigits = cleaned.slice(5);
+                        const prefix = cleaned.slice(3, 5);
+                        const firstGroup = remainingDigits.slice(0, 3);
+                        const secondGroup = remainingDigits.slice(3);
+                        return `+64 ${prefix} ${firstGroup} ${secondGroup}`;
+                    } else {
+                        const remainingDigits = cleaned.slice(4);
+                        const prefix = cleaned.charAt(3);
+                        const firstGroup = remainingDigits.slice(0, 3);
+                        const secondGroup = remainingDigits.slice(3);
+                        return `+64 ${prefix} ${firstGroup} ${secondGroup}`;
+                    }
+                }
+            }
+
+            if (cleaned.startsWith('02') && cleaned.length >= 9) {
+                const prefix = cleaned.slice(0, 3);
+                const remainingDigits = cleaned.slice(3);
+                const firstGroup = remainingDigits.slice(0, 3);
+                const secondGroup = remainingDigits.slice(3);
+                return `${prefix} ${firstGroup} ${secondGroup}`;
+            }
+
+            if (cleaned.startsWith('0') && cleaned.length >= 8) {
+                const prefix = cleaned.slice(0, 2);
+                const remainingDigits = cleaned.slice(2);
+                const firstGroup = remainingDigits.slice(0, 3);
+                const secondGroup = remainingDigits.slice(3);
+                return `${prefix} ${firstGroup} ${secondGroup}`;
+            }
+
+            if (cleaned.length <= 7) {
+                return cleaned.slice(0, 3) + ' ' + cleaned.slice(3);
+            } else {
+                return cleaned.slice(0, 3) + ' ' + cleaned.slice(3, 6) + ' ' + cleaned.slice(6);
+            }
+        }
+
+        function formatPhoneNumbersInPage() {
+            if (formattingInProgress) return;
+            formattingInProgress = true;
+
+            try {
+                // Format in personal info tiles
+                document.querySelectorAll('ul[class*="personal-info-tile-styles"] li, li').forEach(item => {
+                    const paragraphs = item.querySelectorAll('p');
+                    if (paragraphs.length >= 2) {
+                        const labelElement = paragraphs[0];
+                        const valueElement = paragraphs[1];
+
+                        if (labelElement?.textContent?.includes('Phone Number') && valueElement?.textContent) {
+                            const originalNumber = valueElement.textContent.trim();
+                            if (originalNumber && /^\+?[0-9]{7,15}$/.test(originalNumber.replace(/\s/g, ''))) {
+                                const spaceCount = (originalNumber.match(/ /g) || []).length;
+                                if (spaceCount < 2) {
+                                    const formattedNumber = formatPhoneNumber(originalNumber);
+                                    if (formattedNumber !== originalNumber) {
+                                        valueElement.textContent = formattedNumber;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Format in search results
+                document.querySelectorAll('span[data-name="Phone"]').forEach(span => {
+                    if (span?.textContent) {
+                        const originalNumber = span.textContent.trim();
+                        if (originalNumber && /^\+?[0-9]{7,15}$/.test(originalNumber.replace(/\s/g, ''))) {
+                            const spaceCount = (originalNumber.match(/ /g) || []).length;
+                            if (spaceCount < 2) {
+                                const formattedNumber = formatPhoneNumber(originalNumber);
+                                if (formattedNumber !== originalNumber) {
+                                    span.textContent = formattedNumber;
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Error in phone formatter:', error);
+            }
+
+            formattingInProgress = false;
+        }
+
+        setTimeout(formatPhoneNumbersInPage, 1500);
+        setInterval(formatPhoneNumbersInPage, 3000);
+
+        const observer = new MutationObserver(() => {
+            setTimeout(formatPhoneNumbersInPage, 500);
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    // AUTO LINKER PLUGIN
+    function initAutoLinkerPlugin() {
+        let linkingInProgress = false;
+
+        const styles = document.createElement('style');
+        styles.textContent = `
+            .auto-incident-link {
+                color: #0077cc !important;
+                text-decoration: underline !important;
+                cursor: pointer !important;
+                background: rgba(0, 119, 204, 0.1) !important;
+                padding: 1px 3px !important;
+                border-radius: 3px !important;
+                transition: background 0.2s ease !important;
+            }
+            .auto-incident-link:hover {
+                background: rgba(0, 119, 204, 0.2) !important;
+                text-decoration: none !important;
+            }
+        `;
+        document.head.appendChild(styles);
+
+        function isInInputOrSelect(node) {
+            let parent = node.parentNode;
+            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
+                const tagName = parent.tagName.toLowerCase();
+                if (tagName === 'input' || tagName === 'select' || tagName === 'textarea') {
+                    return true;
+                }
+                parent = parent.parentNode;
+            }
+            return false;
+        }
+
+        function alreadyHasLinks(element) {
+            if (element.querySelector && element.querySelector('.auto-incident-link')) {
+                return true;
+            }
+            let parent = element.parentNode;
+            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
+                if (parent.classList && parent.classList.contains('auto-incident-link')) {
+                    return true;
+                }
+                parent = parent.parentNode;
+            }
+            return false;
+        }
+
+        function createIncidentLink(incidentNumber) {
+            const link = document.createElement('span');
+            link.className = 'auto-incident-link';
+            link.title = `Open incident ${incidentNumber}`;
+            link.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Navigate using StarRez shortcode system
+                starrez.sm.NavigateTo(`#!incident:${incidentNumber}:quick%20information`);
+            };
+            return link;
+        }
+
+        function linkifyIncidentReferences(textNode) {
+            if (isInInputOrSelect(textNode) || alreadyHasLinks(textNode)) {
+                return false;
+            }
+
+            const text = textNode.textContent;
+            // Match "incident ######" or "report ######" (case insensitive)
+            const incidentRegex = /\b(incident|report)\s+(\d+)\b/gi;
+
+            if (!incidentRegex.test(text)) {
+                return false;
+            }
+
+            // Reset regex for actual replacement
+            incidentRegex.lastIndex = 0;
+            let modified = false;
+            let lastIndex = 0;
+            const fragment = document.createDocumentFragment();
+            let match;
+
+            while ((match = incidentRegex.exec(text)) !== null) {
+                const matchStart = match.index;
+                const matchEnd = matchStart + match[0].length;
+                const incidentNumber = match[2];
+
+                // Add text before the match
+                if (matchStart > lastIndex) {
+                    const beforeText = document.createTextNode(text.slice(lastIndex, matchStart));
+                    fragment.appendChild(beforeText);
+                }
+
+                // Create the clickable link
+                const link = createIncidentLink(incidentNumber);
+                link.textContent = match[0]; // The full matched text
+                fragment.appendChild(link);
+
+                lastIndex = matchEnd;
+                modified = true;
+            }
+
+            // Add remaining text after the last match
+            if (lastIndex < text.length) {
+                const afterText = document.createTextNode(text.slice(lastIndex));
+                fragment.appendChild(afterText);
+            }
+
+            if (modified) {
+                const parent = textNode.parentNode;
+                parent.replaceChild(fragment, textNode);
+            }
+
+            return modified;
+        }
+
+        function processIncidentLinksInPage() {
+            if (linkingInProgress) return;
+            linkingInProgress = true;
+
+            try {
+                const walker = document.createTreeWalker(
+                    document.body,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: (node) => {
+                            if (!node.textContent.trim() || isInInputOrSelect(node) || alreadyHasLinks(node)) {
+                                return NodeFilter.FILTER_REJECT;
+                            }
+                            // Only process nodes that contain incident/report references
+                            if (/\b(incident|report)\s+\d+\b/i.test(node.textContent)) {
+                                return NodeFilter.FILTER_ACCEPT;
+                            }
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                    }
+                );
+
+                const textNodes = [];
+                let node;
+                while (node = walker.nextNode()) {
+                    textNodes.push(node);
+                }
+
+                textNodes.forEach(textNode => {
+                    if (textNode.parentNode) {
+                        linkifyIncidentReferences(textNode);
+                    }
+                });
+            } catch (error) {
+                console.error('Error in auto linker:', error);
+            }
+
+            linkingInProgress = false;
+        }
+
+        setTimeout(processIncidentLinksInPage, 1500);
+        setInterval(processIncidentLinksInPage, 4000);
+
+        const observer = new MutationObserver(() => {
+            setTimeout(processIncidentLinksInPage, 600);
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    // WORD HIGHLIGHTER PLUGIN
+    function initWordHighlighterPlugin() {
+        let highlightingInProgress = false;
+
+        const styles = document.createElement('style');
+        styles.textContent = `
+            mark.orange-highlight {
+                background: orange !important;
+                opacity: 0;
+                animation: fadeIn 0.5s ease-in forwards;
+            }
+            mark.yellow-highlight {
+                background: yellow !important;
+                opacity: 0;
+                animation: fadeIn 0.5s ease-in forwards;
+            }
+            @keyframes fadeIn {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+        `;
+        document.head.appendChild(styles);
+
+        function isInInputOrSelect(node) {
+            let parent = node.parentNode;
+            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
+                const tagName = parent.tagName.toLowerCase();
+                if (tagName === 'input' || tagName === 'select' || tagName === 'textarea') {
+                    return true;
+                }
+                parent = parent.parentNode;
+            }
+            return false;
+        }
+
+        function alreadyHasMarks(element) {
+            if (element.querySelector && element.querySelector('mark.orange-highlight, mark.yellow-highlight')) {
+                return true;
+            }
+            let parent = element.parentNode;
+            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
+                if (parent.tagName && parent.tagName.toLowerCase() === 'mark') {
+                    return true;
+                }
+                parent = parent.parentNode;
+            }
+            return false;
+        }
+
+        function wrapWordsWithMark(textNode) {
+            if (isInInputOrSelect(textNode) || alreadyHasMarks(textNode)) {
+                return false;
+            }
+
+            const text = textNode.textContent;
+            if (text.includes('Orange') || text.includes('Yellow')) {
+                const tempDiv = document.createElement('div');
+                let modifiedText = text;
+
+                modifiedText = modifiedText.replace(/Orange/g, '<mark class="orange-highlight">Orange</mark>');
+                modifiedText = modifiedText.replace(/Yellow/g, '<mark class="yellow-highlight">Yellow</mark>');
+
+                if (modifiedText !== text) {
+                    tempDiv.innerHTML = modifiedText;
+                    const parent = textNode.parentNode;
+                    const fragment = document.createDocumentFragment();
+                    while (tempDiv.firstChild) {
+                        fragment.appendChild(tempDiv.firstChild);
+                    }
+                    parent.replaceChild(fragment, textNode);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function highlightWordsInPage() {
+            if (highlightingInProgress) return;
+            highlightingInProgress = true;
+
+            try {
+                const walker = document.createTreeWalker(
+                    document.body,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: (node) => {
+                            if (!node.textContent.trim() || isInInputOrSelect(node) || alreadyHasMarks(node)) {
+                                return NodeFilter.FILTER_REJECT;
+                            }
+                            if (node.textContent.includes('Orange') || node.textContent.includes('Yellow')) {
+                                return NodeFilter.FILTER_ACCEPT;
+                            }
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                    }
+                );
+
+                const textNodes = [];
+                let node;
+                while (node = walker.nextNode()) {
+                    textNodes.push(node);
+                }
+
+                textNodes.forEach(textNode => {
+                    if (textNode.parentNode) {
+                        wrapWordsWithMark(textNode);
+                    }
+                });
+            } catch (error) {
+                console.error('Error in word highlighter:', error);
+            }
+
+            highlightingInProgress = false;
+        }
+
+        setTimeout(highlightWordsInPage, 1500);
+        setInterval(highlightWordsInPage, 3000);
+
+        const observer = new MutationObserver(() => {
+            setTimeout(highlightWordsInPage, 500);
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    // ================================
+    // PLUGIN INITIALIZATION
+    // ================================
+
+    function initializePlugin(pluginName) {
+        if (!isPluginEnabled(pluginName)) return;
+
+        switch (pluginName) {
+            case 'bookmarks':
+                initBookmarksPlugin();
+                break;
+            case 'autoSelect':
+                initAutoSelectPlugin();
+                break;
+            case 'clipboard':
+                initClipboardPlugin();
+                break;
+            case 'dropdown':
+                initDropdownPlugin();
+                break;
+            case 'initials':
+                initInitialsPlugin();
+                break;
+            case 'phone':
+                initPhonePlugin();
+                break;
+            case 'wordHighlighter':
+                initWordHighlighterPlugin();
+                break;
+            case 'autoLinker':
+                initAutoLinkerPlugin();
+                break;
+        }
+    }
+
+    function initializeAllPlugins() {
+        Object.keys(currentSettings.plugins).forEach(initializePlugin);
+    }
+
+    // ================================
+    // MAIN INITIALIZATION
+    // ================================
+
+    function initialize() {
+        console.log(`🚀 StarWrench v${SUITE_VERSION} loading...`);
+
+        // Load settings
+        loadSettings();
+
+        // Always add the plugin manager button
+        addPluginManagerButton();
+
+        // Initialize enabled plugins
+        setTimeout(initializeAllPlugins, 500);
+
+        console.log(`✅ StarWrench Enhancement Suite v${SUITE_VERSION} loaded successfully!`);
+    }
+
+    // Start the suite
+    initialize();
+
+})();
