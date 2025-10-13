@@ -8,8 +8,8 @@
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=starrezhousing.com
 // @grant        none
 // @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/YOUR_USERNAME/starrez-enhancement-suite/main/starrez-enhancement-suite.js
-// @downloadURL  https://raw.githubusercontent.com/YOUR_USERNAME/starrez-enhancement-suite/main/starrez-enhancement-suite.js
+// @updateURL    https://raw.githubusercontent.com/nathanhollows/StarWrench/refs/heads/main/StarWrench.js
+// @downloadURL  https://raw.githubusercontent.com/nathanhollows/StarWrench/refs/heads/main/StarWrench.js
 // ==/UserScript==
 
 (function() {
