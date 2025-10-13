@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.0.1
 // @description  An opinionated and unofficial enhancement suite for StarRez with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -130,7 +130,7 @@
         const header = document.createElement('div');
         header.innerHTML = `
             <h3 style="margin: 0 0 15px 0; padding-bottom: 10px; border-bottom: 1px solid #eee; color: #333;">
-                An opinionated and unofficial enhancement suite v${SUITE_VERSION}
+                StarWrench v${SUITE_VERSION}
             </h3>
         `;
         dropdown.appendChild(header);
@@ -183,7 +183,7 @@
                 Reset All Settings
             </button>
             <div style="margin-top: 10px; font-size: 11px; color: #999;">
-                Updates managed by Tampermonkey
+                An unofficial and unaffiliated StarRez enhancement suite.
             </div>
         `;
 
@@ -1272,7 +1272,7 @@
         // Initialize enabled plugins
         setTimeout(initializeAllPlugins, 500);
 
-        console.log(`✅ StarWrench Enhancement Suite v${SUITE_VERSION} loaded successfully!`);
+        console.log(`✅ StarWrench v${SUITE_VERSION} loaded successfully!`);
     }
 
     // Start the suite
