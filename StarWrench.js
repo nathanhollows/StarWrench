@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.2.1
+// @version      1.2.2
 // @description  An opinionated and unofficial enhancement suite for StarRez with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.2.1';
+    const SUITE_VERSION = '1.2.2';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1398,7 +1398,7 @@
 
             const filterLabel = document.createElement('label');
             filterLabel.setAttribute('for', 'starwrench-current-only-filter');
-            filterLabel.textContent = 'Current residents only';
+            filterLabel.textContent = 'Current residents only (uncheck for historical)';
             filterLabel.style.cssText = 'cursor: pointer; user-select: none; color: var(--color-grey-g70, #555);';
 
             filterCheckbox.addEventListener('change', () => {
