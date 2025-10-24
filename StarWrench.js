@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.2.2
+// @version      1.2.3
 // @description  An opinionated and unofficial enhancement suite for StarRez with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.2.2';
+    const SUITE_VERSION = '1.2.3';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1034,8 +1034,8 @@
             }
 
             const text = textNode.textContent;
-            // Match "incident ######" or "report ######" (case insensitive)
-            const incidentRegex = /\b(incident|report)\s+(\d+)\b/gi;
+            // Match "incident ######" (any digits) or "report ######" (exactly 6 digits, case insensitive)
+            const incidentRegex = /\b(incident)\s+(\d+)\b|\b(report)\s+(\d{6})\b/gi;
 
             if (!incidentRegex.test(text)) {
                 return false;
@@ -1051,7 +1051,8 @@
             while ((match = incidentRegex.exec(text)) !== null) {
                 const matchStart = match.index;
                 const matchEnd = matchStart + match[0].length;
-                const incidentNumber = match[2];
+                // match[1] and match[2] for "incident ######", match[3] and match[4] for "report ######"
+                const incidentNumber = match[2] || match[4];
 
                 // Add text before the match
                 if (matchStart > lastIndex) {
