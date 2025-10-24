@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
+// @version      1.2.0
 // @description  An opinionated and unofficial enhancement suite for StarRez with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.1.0';
+    const SUITE_VERSION = '1.2.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1259,9 +1259,11 @@
     function initResidentSearchPlugin() {
         let searchInput = null;
         let resultsContainer = null;
+        let toggleButton = null;
         let currentResults = [];
         let selectedIndex = -1;
         let searchTimeout = null;
+        let showCurrentOnly = true; // Default to current residents only
 
         // Wait for the resident database to be available
         function waitForDatabase(callback, attempts = 0) {
@@ -1420,9 +1422,27 @@
                     return;
                 }
 
-                const results = window.starWrenchResidentDB.search(query.trim());
+                const results = window.starWrenchResidentDB.search(query.trim(), showCurrentOnly);
                 showResults(results);
             }, 150); // Debounce 150ms
+        }
+
+        // Toggle between current and historical residents
+        function toggleFilter() {
+            showCurrentOnly = !showCurrentOnly;
+
+            // Update button text
+            if (toggleButton) {
+                toggleButton.textContent = showCurrentOnly ? 'Current' : 'Historical';
+                toggleButton.style.backgroundColor = showCurrentOnly
+                    ? 'var(--color-blue-b60, #0066cc)'
+                    : 'var(--color-grey-g50, #999)';
+            }
+
+            // Re-run search if there's text
+            if (searchInput && searchInput.value.trim().length >= 2) {
+                handleSearch(searchInput.value);
+            }
         }
 
         // Handle keyboard navigation
@@ -1477,9 +1497,43 @@
             const wrapper = document.createElement('div');
             wrapper.style.cssText = `
                 position: relative;
-                display: inline-block;
+                display: flex;
+                gap: 4px;
+                align-items: center;
                 width: 100%;
             `;
+
+            // Create toggle button
+            toggleButton = document.createElement('button');
+            toggleButton.textContent = 'Current';
+            toggleButton.setAttribute('aria-label', 'Toggle between current and historical residents');
+            toggleButton.title = 'Toggle between current and historical residents';
+            toggleButton.style.cssText = `
+                border: none;
+                height: var(--control-compact-size, 32px);
+                background: var(--color-blue-b60, #0066cc);
+                color: white;
+                border-radius: var(--control-border-radius, 4px);
+                padding: 0 12px;
+                font-size: 12px;
+                font-weight: 500;
+                cursor: pointer;
+                white-space: nowrap;
+                transition: background-color 0.2s;
+            `;
+
+            toggleButton.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleFilter();
+            });
+
+            toggleButton.addEventListener('mouseenter', () => {
+                toggleButton.style.opacity = '0.9';
+            });
+
+            toggleButton.addEventListener('mouseleave', () => {
+                toggleButton.style.opacity = '1';
+            });
 
             // Create new search input
             const newSearch = document.createElement('input');
@@ -1493,7 +1547,7 @@
                 background: white;
                 border-radius: var(--control-border-radius, 4px);
                 padding: 0 8px;
-                width: 100%;
+                flex: 1;
                 font-size: 14px;
                 outline: none;
                 box-sizing: border-box;
@@ -1512,12 +1566,21 @@
                 setTimeout(closeResults, 200);
             });
 
-            // Create results container
+            // Create results container (needs to be positioned relative to the input)
             resultsContainer = createResultsContainer();
 
+            // Create a container for input and results
+            const inputContainer = document.createElement('div');
+            inputContainer.style.cssText = `
+                position: relative;
+                flex: 1;
+            `;
+            inputContainer.appendChild(newSearch);
+            inputContainer.appendChild(resultsContainer);
+
             // Assemble
-            wrapper.appendChild(newSearch);
-            wrapper.appendChild(resultsContainer);
+            wrapper.appendChild(toggleButton);
+            wrapper.appendChild(inputContainer);
 
             // Replace original
             originalSearch.parentNode.replaceChild(wrapper, originalSearch);
@@ -1558,7 +1621,8 @@
     function initResidentDatabasePlugin() {
         const RESIDENT_DB_KEY = 'starWrenchResidentDatabase';
         const RESIDENT_DB_META_KEY = 'starWrenchResidentDatabaseMeta';
-        const VALID_STATUSES = ['Reserved', 'In Room'];
+        const CURRENT_STATUSES = ['Reserved', 'Tentative', 'In Room'];
+        const EXCLUDED_STATUSES = ['Admin'];
 
         // Database structure: { entryId: { nameFirst, namePreferred, nameLast, entryId, roomSpace, status, lastUpdated } }
         let residentDB = {};
@@ -1655,33 +1719,35 @@
 
                     processedIds.add(data.entryId);
 
-                    // Check if this resident should be in the database
-                    if (VALID_STATUSES.includes(data.status)) {
-                        const existing = residentDB[data.entryId];
-
-                        if (!existing) {
-                            // New resident
-                            residentDB[data.entryId] = data;
-                            addedCount++;
-                        } else {
-                            // Check if anything changed
-                            const changed =
-                                existing.nameFirst !== data.nameFirst ||
-                                existing.namePreferred !== data.namePreferred ||
-                                existing.nameLast !== data.nameLast ||
-                                existing.roomSpace !== data.roomSpace ||
-                                existing.status !== data.status;
-
-                            if (changed) {
-                                residentDB[data.entryId] = data;
-                                updatedCount++;
-                            }
-                        }
-                    } else {
-                        // Status is not valid, remove if exists
+                    // Check if this resident should be excluded (Admin status)
+                    if (EXCLUDED_STATUSES.includes(data.status)) {
+                        // Remove if exists
                         if (residentDB[data.entryId]) {
                             delete residentDB[data.entryId];
                             removedCount++;
+                        }
+                        return;
+                    }
+
+                    // Store all other residents
+                    const existing = residentDB[data.entryId];
+
+                    if (!existing) {
+                        // New resident
+                        residentDB[data.entryId] = data;
+                        addedCount++;
+                    } else {
+                        // Check if anything changed
+                        const changed =
+                            existing.nameFirst !== data.nameFirst ||
+                            existing.namePreferred !== data.namePreferred ||
+                            existing.nameLast !== data.nameLast ||
+                            existing.roomSpace !== data.roomSpace ||
+                            existing.status !== data.status;
+
+                        if (changed) {
+                            residentDB[data.entryId] = data;
+                            updatedCount++;
                         }
                     }
                 });
@@ -1787,13 +1853,18 @@
 
         // Expose search function for other plugins to use
         window.starWrenchResidentDB = {
-            search: function(query) {
+            search: function(query, currentOnly = true) {
                 if (!query || typeof query !== 'string') return [];
 
                 const lowerQuery = query.toLowerCase();
                 const results = [];
 
                 Object.values(residentDB).forEach(resident => {
+                    // Filter by current status if requested
+                    if (currentOnly && !CURRENT_STATUSES.includes(resident.status)) {
+                        return;
+                    }
+
                     const searchableText = [
                         resident.nameFirst,
                         resident.namePreferred,
@@ -1812,8 +1883,12 @@
             getById: function(entryId) {
                 return residentDB[entryId] || null;
             },
-            getAll: function() {
-                return Object.values(residentDB);
+            getAll: function(currentOnly = true) {
+                const all = Object.values(residentDB);
+                if (currentOnly) {
+                    return all.filter(r => CURRENT_STATUSES.includes(r.status));
+                }
+                return all;
             },
             getCount: function() {
                 return Object.keys(residentDB).length;
