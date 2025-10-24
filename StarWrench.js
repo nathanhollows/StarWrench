@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.2.4
+// @version      1.2.5
 // @description  An opinionated and unofficial enhancement suite for StarRez with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.2.4';
+    const SUITE_VERSION = '1.2.5';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1840,8 +1840,15 @@
                 const results = [];
 
                 Object.values(residentDB).forEach(resident => {
-                    // Filter by current status if requested
-                    if (currentOnly && !CURRENT_STATUSES.includes(resident.status)) {
+                    // Filter by status based on currentOnly flag
+                    const isCurrent = CURRENT_STATUSES.includes(resident.status);
+
+                    // If currentOnly is true, skip non-current residents
+                    // If currentOnly is false, skip current residents (show only historical)
+                    if (currentOnly && !isCurrent) {
+                        return;
+                    }
+                    if (!currentOnly && isCurrent) {
                         return;
                     }
 
