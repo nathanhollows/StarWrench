@@ -76,7 +76,7 @@ StarWrench includes a settings interface where you can toggle individual plugins
 ## Compatibility
 
 - **Target site**: StarRez Web interface (`https://vuw.starrezhousing.com/StarRezWeb/*`)
-- **Version**: 1.2.1
+- **Version**: 1.2.2
 - **Browsers**: All modern browsers with userscript manager support
 - **Run timing**: Document idle (loads after page content)
 
