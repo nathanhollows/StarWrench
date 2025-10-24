@@ -57,16 +57,16 @@ StarWrench uses a **monolithic plugin architecture** where all plugins are compi
 - **phone** (initPhonePlugin:826): Formats phone numbers for readability
 - **wordHighlighter** (initWordHighlighterPlugin:1097): Color-codes color words
 - **autoLinker** (initAutoLinkerPlugin:933): Converts "incident ######" text to clickable links
-- **residentSearch** (initResidentSearchPlugin:1225): Replaces global search with fast resident lookup. Shows top 10 results with keyboard navigation (arrows + enter). Displays preferred name + last name and room assignment. Navigates to Entry detail screen.
+- **residentSearch** (initResidentSearchPlugin:1258): Replaces global search with fast resident lookup. Shows top 20 results with keyboard navigation (arrows + enter). Displays preferred name + last name, room assignment, and entry ID. Includes toggle button to switch between current (default) and historical residents. Navigates to Entry detail screen.
 
 ### Background Services (Always-On)
 
 These services run automatically and are not user-configurable:
 
-- **residentDatabase** (initResidentDatabasePlugin:1225): Builds and maintains a searchable local database of residents from the directory page. Only stores residents with status "Reserved" or "In Room". Tracks: nameFirst, namePreferred, nameLast, entryId, roomSpace (RoomSpace_Description), status. Room assignments are updated when changes are detected. Provides API at `window.starWrenchResidentDB` with methods:
-  - `search(query)`: Full-text search across names, entry IDs, and room spaces
+- **residentDatabase** (initResidentDatabasePlugin:1557): Builds and maintains a searchable local database of residents from the directory page. Stores ALL residents except "Admin" status. Current statuses: Reserved, Tentative, In Room. Historical: all other statuses. Tracks: nameFirst, namePreferred, nameLast, entryId, roomSpace (RoomSpace_Description), status. Room assignments are updated when changes are detected. Provides API at `window.starWrenchResidentDB` with methods:
+  - `search(query, currentOnly=true)`: Full-text search with optional filter for current residents only
   - `getById(entryId)`: Get resident by entry ID
-  - `getAll()`: Get all cached residents
+  - `getAll(currentOnly=true)`: Get all cached residents with optional current filter
   - `getCount()`: Get total count
   - `refresh()`: Manually trigger database update
   - Storage: `localStorage.starWrenchResidentDatabase` and `localStorage.starWrenchResidentDatabaseMeta`
