@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.2.0
+// @version      1.2.1
 // @description  An opinionated and unofficial enhancement suite for StarRez with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.2.0';
+    const SUITE_VERSION = '1.2.1';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1259,7 +1259,7 @@
     function initResidentSearchPlugin() {
         let searchInput = null;
         let resultsContainer = null;
-        let toggleButton = null;
+        let filterCheckbox = null;
         let currentResults = [];
         let selectedIndex = -1;
         let searchTimeout = null;
@@ -1378,6 +1378,37 @@
             selectedIndex = -1;
             resultsContainer.innerHTML = '';
 
+            // Add filter checkbox at the top
+            const filterContainer = document.createElement('div');
+            filterContainer.style.cssText = `
+                padding: 8px 10px;
+                border-bottom: 1px solid var(--color-grey-g30, #ddd);
+                background: var(--color-grey-g10, #f8f8f8);
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                font-size: 12px;
+            `;
+
+            filterCheckbox = document.createElement('input');
+            filterCheckbox.type = 'checkbox';
+            filterCheckbox.id = 'starwrench-current-only-filter';
+            filterCheckbox.checked = showCurrentOnly;
+            filterCheckbox.style.cssText = 'cursor: pointer;';
+
+            const filterLabel = document.createElement('label');
+            filterLabel.setAttribute('for', 'starwrench-current-only-filter');
+            filterLabel.textContent = 'Current residents only';
+            filterLabel.style.cssText = 'cursor: pointer; user-select: none; color: var(--color-grey-g70, #555);';
+
+            filterCheckbox.addEventListener('change', () => {
+                toggleFilter();
+            });
+
+            filterContainer.appendChild(filterCheckbox);
+            filterContainer.appendChild(filterLabel);
+            resultsContainer.appendChild(filterContainer);
+
             if (results.length === 0) {
                 const noResults = document.createElement('div');
                 noResults.style.cssText = 'padding: 16px 12px; text-align: center; color: var(--color-grey-g60, #666);';
@@ -1429,15 +1460,7 @@
 
         // Toggle between current and historical residents
         function toggleFilter() {
-            showCurrentOnly = !showCurrentOnly;
-
-            // Update button text
-            if (toggleButton) {
-                toggleButton.textContent = showCurrentOnly ? 'Current' : 'Historical';
-                toggleButton.style.backgroundColor = showCurrentOnly
-                    ? 'var(--color-blue-b60, #0066cc)'
-                    : 'var(--color-grey-g50, #999)';
-            }
+            showCurrentOnly = filterCheckbox ? filterCheckbox.checked : true;
 
             // Re-run search if there's text
             if (searchInput && searchInput.value.trim().length >= 2) {
@@ -1497,43 +1520,9 @@
             const wrapper = document.createElement('div');
             wrapper.style.cssText = `
                 position: relative;
-                display: flex;
-                gap: 4px;
-                align-items: center;
+                display: inline-block;
                 width: 100%;
             `;
-
-            // Create toggle button
-            toggleButton = document.createElement('button');
-            toggleButton.textContent = 'Current';
-            toggleButton.setAttribute('aria-label', 'Toggle between current and historical residents');
-            toggleButton.title = 'Toggle between current and historical residents';
-            toggleButton.style.cssText = `
-                border: none;
-                height: var(--control-compact-size, 32px);
-                background: var(--color-blue-b60, #0066cc);
-                color: white;
-                border-radius: var(--control-border-radius, 4px);
-                padding: 0 12px;
-                font-size: 12px;
-                font-weight: 500;
-                cursor: pointer;
-                white-space: nowrap;
-                transition: background-color 0.2s;
-            `;
-
-            toggleButton.addEventListener('click', (e) => {
-                e.stopPropagation();
-                toggleFilter();
-            });
-
-            toggleButton.addEventListener('mouseenter', () => {
-                toggleButton.style.opacity = '0.9';
-            });
-
-            toggleButton.addEventListener('mouseleave', () => {
-                toggleButton.style.opacity = '1';
-            });
 
             // Create new search input
             const newSearch = document.createElement('input');
@@ -1547,7 +1536,7 @@
                 background: white;
                 border-radius: var(--control-border-radius, 4px);
                 padding: 0 8px;
-                flex: 1;
+                width: 100%;
                 font-size: 14px;
                 outline: none;
                 box-sizing: border-box;
@@ -1566,21 +1555,12 @@
                 setTimeout(closeResults, 200);
             });
 
-            // Create results container (needs to be positioned relative to the input)
+            // Create results container
             resultsContainer = createResultsContainer();
 
-            // Create a container for input and results
-            const inputContainer = document.createElement('div');
-            inputContainer.style.cssText = `
-                position: relative;
-                flex: 1;
-            `;
-            inputContainer.appendChild(newSearch);
-            inputContainer.appendChild(resultsContainer);
-
             // Assemble
-            wrapper.appendChild(toggleButton);
-            wrapper.appendChild(inputContainer);
+            wrapper.appendChild(newSearch);
+            wrapper.appendChild(resultsContainer);
 
             // Replace original
             originalSearch.parentNode.replaceChild(wrapper, originalSearch);

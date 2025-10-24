@@ -57,7 +57,7 @@ StarWrench uses a **monolithic plugin architecture** where all plugins are compi
 - **phone** (initPhonePlugin:826): Formats phone numbers for readability
 - **wordHighlighter** (initWordHighlighterPlugin:1097): Color-codes color words
 - **autoLinker** (initAutoLinkerPlugin:933): Converts "incident ######" text to clickable links
-- **residentSearch** (initResidentSearchPlugin:1258): Replaces global search with fast resident lookup. Shows top 20 results with keyboard navigation (arrows + enter). Displays preferred name + last name, room assignment, and entry ID. Includes toggle button to switch between current (default) and historical residents. Navigates to Entry detail screen.
+- **residentSearch** (initResidentSearchPlugin:1258): Replaces global search with fast resident lookup. Shows top 20 results with keyboard navigation (arrows + enter). Displays preferred name + last name, room assignment, and entry ID. Includes checkbox at top of results dropdown to filter current residents (checked by default). Navigates to Entry detail screen.
 
 ### Background Services (Always-On)
 

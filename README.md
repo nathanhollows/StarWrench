@@ -9,7 +9,7 @@ StarWrench is an unofficial and unaffiliated suite of time-saving and quality of
 StarWrench includes the following enhancement plugins:
 
 ### 🔎 Resident Search
-Replaces the global search with a fast, intelligent resident lookup. Search by name, entry ID, or room assignment and get instant results. Features keyboard navigation (arrow keys + enter) and shows up to 20 results with preferred name, room assignment, and entry ID. Includes a toggle to switch between current residents (Reserved, Tentative, In Room) and historical residents (all statuses except Admin). Powered by the local resident database for lightning-fast searches.
+Replaces the global search with a fast, intelligent resident lookup. Search by name, entry ID, or room assignment and get instant results. Features keyboard navigation (arrow keys + enter) and shows up to 20 results with preferred name, room assignment, and entry ID. Includes a checkbox filter at the top of results to toggle between current residents (Reserved, Tentative, In Room) and all historical residents. Powered by the local resident database for lightning-fast searches.
 
 ### 📖 Bookmarks
 Save and organize frequently visited pages with drag-and-drop management. Easily access your most-used StarRez pages.
@@ -76,7 +76,7 @@ StarWrench includes a settings interface where you can toggle individual plugins
 ## Compatibility
 
 - **Target site**: StarRez Web interface (`https://vuw.starrezhousing.com/StarRezWeb/*`)
-- **Version**: 1.2.0
+- **Version**: 1.2.1
 - **Browsers**: All modern browsers with userscript manager support
 - **Run timing**: Document idle (loads after page content)
 
