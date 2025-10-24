@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
+// @version      1.1.0
 // @description  An opinionated and unofficial enhancement suite for StarRez with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.0.0';
+    const SUITE_VERSION = '1.1.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -64,6 +64,11 @@
                 enabled: true,
                 name: '🔗 Incident Auto Linker',
                 description: 'Automatically converts "incident ######" or "report ######" text into clickable links'
+            },
+            residentSearch: {
+                enabled: true,
+                name: '🔎 Resident Search',
+                description: 'Replaces global search with a fast resident lookup powered by the local database'
             }
         }
     };
@@ -77,7 +82,40 @@
     function loadSettings() {
         try {
             const stored = localStorage.getItem(SETTINGS_KEY);
-            currentSettings = stored ? { ...DEFAULT_SETTINGS, ...JSON.parse(stored) } : { ...DEFAULT_SETTINGS };
+
+            if (!stored) {
+                // No saved settings, use defaults
+                currentSettings = { ...DEFAULT_SETTINGS };
+                return;
+            }
+
+            const savedSettings = JSON.parse(stored);
+
+            // Merge saved settings with defaults to handle new plugins
+            currentSettings = {
+                plugins: {}
+            };
+
+            // First, add all default plugins
+            Object.keys(DEFAULT_SETTINGS.plugins).forEach(pluginName => {
+                if (savedSettings.plugins && savedSettings.plugins[pluginName]) {
+                    // Plugin exists in saved settings, use saved enabled state
+                    currentSettings.plugins[pluginName] = {
+                        ...DEFAULT_SETTINGS.plugins[pluginName],
+                        enabled: savedSettings.plugins[pluginName].enabled
+                    };
+                } else {
+                    // New plugin, use default settings
+                    currentSettings.plugins[pluginName] = {
+                        ...DEFAULT_SETTINGS.plugins[pluginName]
+                    };
+                    console.log(`[StarWrench] New plugin detected: ${DEFAULT_SETTINGS.plugins[pluginName].name}`);
+                }
+            });
+
+            // Save the merged settings back to persist new plugins
+            saveSettings();
+
         } catch (error) {
             console.error('Failed to load settings:', error);
             currentSettings = { ...DEFAULT_SETTINGS };
@@ -1217,6 +1255,577 @@
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
+    // RESIDENT SEARCH PLUGIN
+    function initResidentSearchPlugin() {
+        let searchInput = null;
+        let resultsContainer = null;
+        let currentResults = [];
+        let selectedIndex = -1;
+        let searchTimeout = null;
+
+        // Wait for the resident database to be available
+        function waitForDatabase(callback, attempts = 0) {
+            if (window.starWrenchResidentDB) {
+                callback();
+            } else if (attempts < 50) {
+                setTimeout(() => waitForDatabase(callback, attempts + 1), 100);
+            } else {
+                console.error('[ResidentSearch] Resident database not available');
+            }
+        }
+
+        // Navigate to a resident's entry
+        function navigateToResident(entryId) {
+            if (!entryId) return;
+            const shortcode = `Entry:${entryId}`;
+            starrez.sm.NavigateTo(`#!${shortcode}`);
+        }
+
+        // Create the results dropdown
+        function createResultsContainer() {
+            const container = document.createElement('div');
+            container.id = 'starwrench-resident-search-results';
+            container.style.cssText = `
+                position: absolute;
+                top: 100%;
+                left: 0;
+                min-width: 100%;
+                width: max-content;
+                max-width: 400px;
+                background: white;
+                border: 1px solid var(--color-grey-g30, #ccc);
+                border-top: none;
+                border-radius: 0 0 4px 4px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                max-height: 400px;
+                overflow-y: auto;
+                z-index: 10000;
+                display: none;
+                margin-top: -1px;
+            `;
+            return container;
+        }
+
+        // Create a single result item
+        function createResultItem(resident, index) {
+            const item = document.createElement('div');
+            item.className = 'starwrench-search-result-item';
+            item.dataset.index = index;
+            item.dataset.entryId = resident.entryId;
+
+            const displayName = `${resident.namePreferred || resident.nameFirst} ${resident.nameLast}`;
+            const roomInfo = resident.roomSpace || 'No room';
+
+            item.style.cssText = `
+                padding: 6px 10px;
+                cursor: pointer;
+                border-bottom: 1px solid var(--color-grey-g20, #f0f0f0);
+                transition: background-color 0.1s;
+            `;
+
+            item.innerHTML = `
+                <div style="font-weight: 600; color: var(--color-grey-g90, #333); font-size: 14px; line-height: 1.3;">
+                    ${displayName}
+                </div>
+                <div style="font-size: 11px; color: var(--color-grey-g60, #666); line-height: 1.3;">
+                    ${roomInfo}
+                </div>
+                <div style="font-size: 11px; color: var(--color-grey-g50, #999); line-height: 1.3;">
+                    Entry ${resident.entryId}
+                </div>
+            `;
+
+            // Click handler
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                navigateToResident(resident.entryId);
+                closeResults();
+                if (searchInput) searchInput.value = '';
+            });
+
+            // Hover handler
+            item.addEventListener('mouseenter', () => {
+                setSelectedIndex(index);
+            });
+
+            return item;
+        }
+
+        // Update the visual selection
+        function setSelectedIndex(index) {
+            selectedIndex = index;
+
+            const items = resultsContainer.querySelectorAll('.starwrench-search-result-item');
+            items.forEach((item, i) => {
+                if (i === index) {
+                    item.style.backgroundColor = 'var(--color-blue-b20, #e6f2ff)';
+                } else {
+                    item.style.backgroundColor = 'white';
+                }
+            });
+
+            // Scroll into view if needed
+            if (items[index]) {
+                items[index].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        }
+
+        // Display search results
+        function showResults(results) {
+            currentResults = results;
+            selectedIndex = -1;
+            resultsContainer.innerHTML = '';
+
+            if (results.length === 0) {
+                const noResults = document.createElement('div');
+                noResults.style.cssText = 'padding: 16px 12px; text-align: center; color: var(--color-grey-g60, #666);';
+                noResults.textContent = 'No residents found';
+                resultsContainer.appendChild(noResults);
+                resultsContainer.style.display = 'block';
+                return;
+            }
+
+            // Limit to top 20 results
+            const limitedResults = results.slice(0, 20);
+            limitedResults.forEach((resident, index) => {
+                const item = createResultItem(resident, index);
+                resultsContainer.appendChild(item);
+            });
+
+            resultsContainer.style.display = 'block';
+        }
+
+        // Close the results dropdown
+        function closeResults() {
+            if (resultsContainer) {
+                resultsContainer.style.display = 'none';
+                resultsContainer.innerHTML = '';
+            }
+            currentResults = [];
+            selectedIndex = -1;
+        }
+
+        // Handle search input
+        function handleSearch(query) {
+            clearTimeout(searchTimeout);
+
+            if (!query || query.trim().length < 2) {
+                closeResults();
+                return;
+            }
+
+            searchTimeout = setTimeout(() => {
+                if (!window.starWrenchResidentDB) {
+                    console.error('[ResidentSearch] Database not available');
+                    return;
+                }
+
+                const results = window.starWrenchResidentDB.search(query.trim());
+                showResults(results);
+            }, 150); // Debounce 150ms
+        }
+
+        // Handle keyboard navigation
+        function handleKeyDown(e) {
+            if (!resultsContainer || resultsContainer.style.display === 'none') {
+                return;
+            }
+
+            const itemCount = currentResults.length > 20 ? 20 : currentResults.length;
+
+            switch (e.key) {
+                case 'ArrowDown':
+                    e.preventDefault();
+                    if (selectedIndex < itemCount - 1) {
+                        setSelectedIndex(selectedIndex + 1);
+                    }
+                    break;
+
+                case 'ArrowUp':
+                    e.preventDefault();
+                    if (selectedIndex > 0) {
+                        setSelectedIndex(selectedIndex - 1);
+                    }
+                    break;
+
+                case 'Enter':
+                    e.preventDefault();
+                    if (selectedIndex >= 0 && currentResults[selectedIndex]) {
+                        navigateToResident(currentResults[selectedIndex].entryId);
+                        closeResults();
+                        if (searchInput) searchInput.value = '';
+                    }
+                    break;
+
+                case 'Escape':
+                    e.preventDefault();
+                    closeResults();
+                    if (searchInput) searchInput.blur();
+                    break;
+            }
+        }
+
+        // Replace the search input
+        function replaceSearchInput() {
+            const originalSearch = document.querySelector('habitat-search-input#header-global-search');
+            if (!originalSearch) {
+                console.log('[ResidentSearch] Original search input not found');
+                return false;
+            }
+
+            // Create wrapper for positioning
+            const wrapper = document.createElement('div');
+            wrapper.style.cssText = `
+                position: relative;
+                display: inline-block;
+                width: 100%;
+            `;
+
+            // Create new search input
+            const newSearch = document.createElement('input');
+            newSearch.id = 'starwrench-resident-search-input';
+            newSearch.type = 'text';
+            newSearch.placeholder = 'Search residents...';
+            newSearch.setAttribute('aria-label', 'Search residents');
+            newSearch.style.cssText = `
+                border: 1px solid var(--color-grey-g30, #ccc);
+                height: var(--control-compact-size, 32px);
+                background: white;
+                border-radius: var(--control-border-radius, 4px);
+                padding: 0 8px;
+                width: 100%;
+                font-size: 14px;
+                outline: none;
+                box-sizing: border-box;
+            `;
+
+            // Focus styling
+            newSearch.addEventListener('focus', () => {
+                newSearch.style.outline = '2px solid var(--color-blue-b60, #0066cc)';
+                newSearch.style.borderColor = 'var(--color-blue-b60, #0066cc)';
+            });
+
+            newSearch.addEventListener('blur', () => {
+                newSearch.style.outline = 'none';
+                newSearch.style.borderColor = 'var(--color-grey-g30, #ccc)';
+                // Delay closing to allow clicks on results
+                setTimeout(closeResults, 200);
+            });
+
+            // Create results container
+            resultsContainer = createResultsContainer();
+
+            // Assemble
+            wrapper.appendChild(newSearch);
+            wrapper.appendChild(resultsContainer);
+
+            // Replace original
+            originalSearch.parentNode.replaceChild(wrapper, originalSearch);
+            searchInput = newSearch;
+
+            // Add event listeners
+            searchInput.addEventListener('input', (e) => handleSearch(e.target.value));
+            searchInput.addEventListener('keydown', handleKeyDown);
+
+            // Click outside to close
+            document.addEventListener('click', (e) => {
+                if (!wrapper.contains(e.target)) {
+                    closeResults();
+                }
+            });
+
+            console.log('[ResidentSearch] Search input replaced successfully');
+            return true;
+        }
+
+        // Initialize the plugin
+        function initialize() {
+            waitForDatabase(() => {
+                setTimeout(() => {
+                    const success = replaceSearchInput();
+                    if (!success) {
+                        // Retry after a delay
+                        setTimeout(() => replaceSearchInput(), 2000);
+                    }
+                }, 1500);
+            });
+        }
+
+        initialize();
+    }
+
+    // RESIDENT DATABASE PLUGIN
+    function initResidentDatabasePlugin() {
+        const RESIDENT_DB_KEY = 'starWrenchResidentDatabase';
+        const RESIDENT_DB_META_KEY = 'starWrenchResidentDatabaseMeta';
+        const VALID_STATUSES = ['Reserved', 'In Room'];
+
+        // Database structure: { entryId: { nameFirst, namePreferred, nameLast, entryId, roomSpace, status, lastUpdated } }
+        let residentDB = {};
+        let lastKnownDataHash = '';
+        let isProcessing = false;
+
+        // Load database from localStorage
+        function loadDatabase() {
+            try {
+                const stored = localStorage.getItem(RESIDENT_DB_KEY);
+                if (stored) {
+                    residentDB = JSON.parse(stored);
+                    console.log(`[ResidentDB] Loaded ${Object.keys(residentDB).length} residents from database`);
+                } else {
+                    residentDB = {};
+                }
+            } catch (error) {
+                console.error('[ResidentDB] Failed to load database:', error);
+                residentDB = {};
+            }
+        }
+
+        // Save database to localStorage
+        function saveDatabase() {
+            try {
+                localStorage.setItem(RESIDENT_DB_KEY, JSON.stringify(residentDB));
+                localStorage.setItem(RESIDENT_DB_META_KEY, JSON.stringify({
+                    lastUpdated: new Date().toISOString(),
+                    recordCount: Object.keys(residentDB).length
+                }));
+            } catch (error) {
+                console.error('[ResidentDB] Failed to save database:', error);
+            }
+        }
+
+        // Extract text content from a table cell by class name
+        function getCellText(row, className) {
+            const cell = row.querySelector(`td.${className} .data-column`);
+            if (!cell) return '';
+            return cell.textContent.trim();
+        }
+
+        // Process a single table row
+        function processRow(row) {
+            const entryId = row.getAttribute('data-id');
+            if (!entryId) return null;
+
+            const status = getCellText(row, 'EntryStatusEnum');
+            const nameFirst = getCellText(row, 'NameFirst');
+            const namePreferred = getCellText(row, 'NamePreferred');
+            const nameLast = getCellText(row, 'NameLast');
+            const roomSpace = getCellText(row, 'RoomSpace_Description');
+
+            return {
+                entryId,
+                nameFirst,
+                namePreferred,
+                nameLast,
+                roomSpace,
+                status,
+                lastUpdated: new Date().toISOString()
+            };
+        }
+
+        // Update the database with current page data
+        function updateDatabase() {
+            if (isProcessing) return;
+            isProcessing = true;
+
+            try {
+                const table = document.querySelector('table.directory-grid tbody');
+                if (!table) {
+                    console.log('[ResidentDB] Directory table not found');
+                    isProcessing = false;
+                    return;
+                }
+
+                const rows = table.querySelectorAll('tr[data-id]');
+                if (rows.length === 0) {
+                    console.log('[ResidentDB] No data rows found');
+                    isProcessing = false;
+                    return;
+                }
+
+                let addedCount = 0;
+                let updatedCount = 0;
+                let removedCount = 0;
+                const processedIds = new Set();
+
+                // Process each row
+                rows.forEach(row => {
+                    const data = processRow(row);
+                    if (!data) return;
+
+                    processedIds.add(data.entryId);
+
+                    // Check if this resident should be in the database
+                    if (VALID_STATUSES.includes(data.status)) {
+                        const existing = residentDB[data.entryId];
+
+                        if (!existing) {
+                            // New resident
+                            residentDB[data.entryId] = data;
+                            addedCount++;
+                        } else {
+                            // Check if anything changed
+                            const changed =
+                                existing.nameFirst !== data.nameFirst ||
+                                existing.namePreferred !== data.namePreferred ||
+                                existing.nameLast !== data.nameLast ||
+                                existing.roomSpace !== data.roomSpace ||
+                                existing.status !== data.status;
+
+                            if (changed) {
+                                residentDB[data.entryId] = data;
+                                updatedCount++;
+                            }
+                        }
+                    } else {
+                        // Status is not valid, remove if exists
+                        if (residentDB[data.entryId]) {
+                            delete residentDB[data.entryId];
+                            removedCount++;
+                        }
+                    }
+                });
+
+                // Check for residents that are no longer on the page but were previously stored
+                // (This handles cases where residents changed status on a different page)
+                // We don't remove them here as they might just not be on this page of results
+
+                if (addedCount > 0 || updatedCount > 0 || removedCount > 0) {
+                    saveDatabase();
+                    console.log(`[ResidentDB] Updated: +${addedCount} new, ~${updatedCount} modified, -${removedCount} removed. Total: ${Object.keys(residentDB).length}`);
+                }
+
+            } catch (error) {
+                console.error('[ResidentDB] Error updating database:', error);
+            }
+
+            isProcessing = false;
+        }
+
+        // Debounced update function
+        let updateTimeout;
+        function scheduleUpdate(delay = 500) {
+            clearTimeout(updateTimeout);
+            updateTimeout = setTimeout(updateDatabase, delay);
+        }
+
+        // Check if we're on the directory page
+        function isOnDirectoryPage() {
+            return window.location.href.includes('/StarRezWeb/main/directory') ||
+                   window.location.href.includes('/StarRezWeb/Main/Directory');
+        }
+
+        // Initialize the plugin
+        function initialize() {
+            if (!isOnDirectoryPage()) {
+                console.log('[ResidentDB] Not on directory page, plugin inactive');
+                return;
+            }
+
+            console.log('[ResidentDB] Initializing on directory page');
+            loadDatabase();
+
+            // Initial scan after page loads
+            setTimeout(() => {
+                updateDatabase();
+            }, 2000);
+
+            // Watch for AJAX requests to GetPagedData
+            const originalFetch = window.fetch;
+            window.fetch = function(...args) {
+                const url = args[0];
+
+                // Intercept GetPagedData requests
+                if (typeof url === 'string' && url.includes('/Main/Directory/GetPagedData')) {
+                    return originalFetch.apply(this, args).then(response => {
+                        // Clone response so we can read it
+                        const clonedResponse = response.clone();
+
+                        // Schedule update after the DOM has been updated
+                        scheduleUpdate(800);
+
+                        return response;
+                    });
+                }
+
+                return originalFetch.apply(this, args);
+            };
+
+            // Also watch for DOM changes as a backup
+            const observer = new MutationObserver((mutations) => {
+                const hasTableChanges = mutations.some(mutation => {
+                    return Array.from(mutation.addedNodes).some(node => {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            return node.matches && (
+                                node.matches('tr[data-id]') ||
+                                node.querySelector && node.querySelector('tr[data-id]')
+                            );
+                        }
+                        return false;
+                    });
+                });
+
+                if (hasTableChanges) {
+                    scheduleUpdate(1000);
+                }
+            });
+
+            // Observe the table container
+            setTimeout(() => {
+                const tableContainer = document.querySelector('table.directory-grid');
+                if (tableContainer) {
+                    observer.observe(tableContainer, {
+                        childList: true,
+                        subtree: true
+                    });
+                    console.log('[ResidentDB] Observing directory table for changes');
+                }
+            }, 1500);
+
+            console.log('[ResidentDB] Plugin initialized successfully');
+        }
+
+        // Expose search function for other plugins to use
+        window.starWrenchResidentDB = {
+            search: function(query) {
+                if (!query || typeof query !== 'string') return [];
+
+                const lowerQuery = query.toLowerCase();
+                const results = [];
+
+                Object.values(residentDB).forEach(resident => {
+                    const searchableText = [
+                        resident.nameFirst,
+                        resident.namePreferred,
+                        resident.nameLast,
+                        resident.entryId,
+                        resident.roomSpace
+                    ].join(' ').toLowerCase();
+
+                    if (searchableText.includes(lowerQuery)) {
+                        results.push(resident);
+                    }
+                });
+
+                return results;
+            },
+            getById: function(entryId) {
+                return residentDB[entryId] || null;
+            },
+            getAll: function() {
+                return Object.values(residentDB);
+            },
+            getCount: function() {
+                return Object.keys(residentDB).length;
+            },
+            refresh: function() {
+                updateDatabase();
+            }
+        };
+
+        initialize();
+    }
+
     // ================================
     // PLUGIN INITIALIZATION
     // ================================
@@ -1249,6 +1858,9 @@
             case 'autoLinker':
                 initAutoLinkerPlugin();
                 break;
+            case 'residentSearch':
+                initResidentSearchPlugin();
+                break;
         }
     }
 
@@ -1268,6 +1880,11 @@
 
         // Always add the plugin manager button
         addPluginManagerButton();
+
+        // Initialize background services (always on, not user-configurable)
+        setTimeout(() => {
+            initResidentDatabasePlugin();
+        }, 500);
 
         // Initialize enabled plugins
         setTimeout(initializeAllPlugins, 500);
