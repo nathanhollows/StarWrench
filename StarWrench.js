@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.2.5
+// @version      1.2.7
 // @description  An opinionated and unofficial enhancement suite for StarRez with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.2.5';
+    const SUITE_VERSION = '1.2.7';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -69,6 +69,11 @@
                 enabled: true,
                 name: '🔎 Resident Search',
                 description: 'Replaces global search with a fast resident lookup powered by the local database'
+            },
+            quickIncidentParticipants: {
+                enabled: true,
+                name: '👥 Quick Incident Participants',
+                description: 'Add a search bar in incident Participants section to quickly add residents'
             }
         }
     };
@@ -712,6 +717,7 @@
     function initInitialsPlugin() {
         let processingInProgress = false;
         let nameCache = {};
+        let currentIncidentId = null;
 
         const styles = document.createElement('style');
         styles.textContent = `
@@ -721,6 +727,15 @@
             }
         `;
         document.head.appendChild(styles);
+
+        function getCurrentIncidentId() {
+            // Extract incident ID from URL hash like #!incident:144073:quick%20information
+            const hash = window.location.hash;
+            if (!hash || !hash.includes('incident:')) return null;
+
+            const match = hash.match(/incident:(\d+)/);
+            return match ? match[1] : null;
+        }
 
         function extractNamesFromParticipants() {
             const names = {};
@@ -810,13 +825,23 @@
             processingInProgress = true;
 
             try {
+                // Check if we've navigated to a different incident
+                const incidentId = getCurrentIncidentId();
+                if (incidentId !== currentIncidentId) {
+                    // Clear the cache when switching incidents
+                    nameCache = {};
+                    currentIncidentId = incidentId;
+                    console.log(`[Initials] Cleared cache for new incident: ${incidentId}`);
+                }
+
                 const nameMap = extractNamesFromParticipants();
                 if (Object.keys(nameMap).length === 0) {
                     processingInProgress = false;
                     return;
                 }
 
-                nameCache = { ...nameCache, ...nameMap };
+                // Replace the cache instead of merging
+                nameCache = nameMap;
 
                 document.querySelectorAll('span.field.view-control.textarea .textarea').forEach(field => {
                     const walker = document.createTreeWalker(
@@ -1597,6 +1622,346 @@
         initialize();
     }
 
+    // QUICK INCIDENT PARTICIPANTS PLUGIN
+    function initQuickIncidentParticipantsPlugin() {
+        let searchInput = null;
+        let resultsContainer = null;
+        let currentResults = [];
+        let selectedIndex = -1;
+        let searchTimeout = null;
+
+        // Wait for the resident database to be available
+        function waitForDatabase(callback, attempts = 0) {
+            if (window.starWrenchResidentDB) {
+                callback();
+            } else if (attempts < 50) {
+                setTimeout(() => waitForDatabase(callback, attempts + 1), 100);
+            } else {
+                console.error('[QuickIncidentParticipants] Resident database not available');
+            }
+        }
+
+        // Create the results dropdown
+        function createResultsContainer() {
+            const container = document.createElement('div');
+            container.className = 'starwrench-quick-participants-results';
+            container.style.cssText = `
+                position: absolute;
+                top: 100%;
+                right: 0;
+                min-width: 300px;
+                width: max-content;
+                max-width: 400px;
+                background: white;
+                border: 1px solid var(--color-grey-g30, #ccc);
+                border-top: none;
+                border-radius: 0 0 4px 4px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                max-height: 400px;
+                overflow-y: auto;
+                z-index: 10000;
+                display: none;
+                margin-top: -1px;
+            `;
+            return container;
+        }
+
+        // Create a single result item
+        function createResultItem(resident, index) {
+            const item = document.createElement('div');
+            item.className = 'starwrench-search-result-item';
+            item.dataset.index = index;
+            item.dataset.entryId = resident.entryId;
+
+            const displayName = `${resident.namePreferred || resident.nameFirst} ${resident.nameLast}`;
+            const roomInfo = resident.roomSpace || 'No room';
+
+            item.style.cssText = `
+                padding: 6px 10px;
+                cursor: pointer;
+                border-bottom: 1px solid var(--color-grey-g20, #f0f0f0);
+                transition: background-color 0.1s;
+            `;
+
+            item.innerHTML = `
+                <div style="font-weight: 600; color: var(--color-grey-g90, #333); font-size: 14px; line-height: 1.3;">
+                    ${displayName}
+                </div>
+                <div style="font-size: 11px; color: var(--color-grey-g60, #666); line-height: 1.3;">
+                    ${roomInfo}
+                </div>
+                <div style="font-size: 11px; color: var(--color-grey-g50, #999); line-height: 1.3;">
+                    Entry ${resident.entryId}
+                </div>
+            `;
+
+            // Click handler
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                // TODO: Add web call here
+                alert('Selected: ' + displayName);
+                closeResults();
+                if (searchInput) searchInput.value = '';
+            });
+
+            // Hover handler
+            item.addEventListener('mouseenter', () => {
+                setSelectedIndex(index);
+            });
+
+            return item;
+        }
+
+        // Update the visual selection
+        function setSelectedIndex(index) {
+            selectedIndex = index;
+
+            const items = resultsContainer.querySelectorAll('.starwrench-search-result-item');
+            items.forEach((item, i) => {
+                if (i === index) {
+                    item.style.backgroundColor = 'var(--color-blue-b20, #e6f2ff)';
+                } else {
+                    item.style.backgroundColor = 'white';
+                }
+            });
+
+            // Scroll into view if needed
+            if (items[index]) {
+                items[index].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        }
+
+        // Display search results
+        function showResults(results) {
+            currentResults = results;
+            selectedIndex = -1;
+            resultsContainer.innerHTML = '';
+
+            if (results.length === 0) {
+                const noResults = document.createElement('div');
+                noResults.style.cssText = 'padding: 16px 12px; text-align: center; color: var(--color-grey-g60, #666);';
+                noResults.textContent = 'No residents found';
+                resultsContainer.appendChild(noResults);
+                resultsContainer.style.display = 'block';
+                return;
+            }
+
+            // Limit to top 20 results
+            const limitedResults = results.slice(0, 20);
+            limitedResults.forEach((resident, index) => {
+                const item = createResultItem(resident, index);
+                resultsContainer.appendChild(item);
+            });
+
+            resultsContainer.style.display = 'block';
+        }
+
+        // Close the results dropdown
+        function closeResults() {
+            if (resultsContainer) {
+                resultsContainer.style.display = 'none';
+                resultsContainer.innerHTML = '';
+            }
+            currentResults = [];
+            selectedIndex = -1;
+        }
+
+        // Handle search input
+        function handleSearch(query) {
+            clearTimeout(searchTimeout);
+
+            if (!query || query.trim().length < 2) {
+                closeResults();
+                return;
+            }
+
+            searchTimeout = setTimeout(() => {
+                if (!window.starWrenchResidentDB) {
+                    console.error('[QuickIncidentParticipants] Database not available');
+                    return;
+                }
+
+                const results = window.starWrenchResidentDB.search(query.trim(), true); // Current residents only
+                showResults(results);
+            }, 150); // Debounce 150ms
+        }
+
+        // Handle keyboard navigation
+        function handleKeyDown(e) {
+            if (!resultsContainer || resultsContainer.style.display === 'none') {
+                return;
+            }
+
+            const itemCount = currentResults.length > 20 ? 20 : currentResults.length;
+
+            switch (e.key) {
+                case 'ArrowDown':
+                    e.preventDefault();
+                    if (selectedIndex < itemCount - 1) {
+                        setSelectedIndex(selectedIndex + 1);
+                    }
+                    break;
+
+                case 'ArrowUp':
+                    e.preventDefault();
+                    if (selectedIndex > 0) {
+                        setSelectedIndex(selectedIndex - 1);
+                    }
+                    break;
+
+                case 'Enter':
+                    e.preventDefault();
+                    if (selectedIndex >= 0 && currentResults[selectedIndex]) {
+                        const resident = currentResults[selectedIndex];
+                        const displayName = `${resident.namePreferred || resident.nameFirst} ${resident.nameLast}`;
+                        alert('Selected: ' + displayName);
+                        closeResults();
+                        if (searchInput) searchInput.value = '';
+                    }
+                    break;
+
+                case 'Escape':
+                    e.preventDefault();
+                    closeResults();
+                    if (searchInput) searchInput.blur();
+                    break;
+            }
+        }
+
+        // Insert search bar into the Participants section
+        function insertSearchBar() {
+            // Check if we're on an incident page
+            if (!window.location.hash || !window.location.hash.includes('incident:')) {
+                return false;
+            }
+
+            // Find the Participants section
+            const participantsSection = Array.from(document.querySelectorAll('.fieldset-block .caption')).find(
+                caption => caption.textContent.trim() === 'Participants'
+            );
+
+            if (!participantsSection) {
+                return false;
+            }
+
+            // Check if search bar already exists
+            if (participantsSection.parentElement.querySelector('.starwrench-quick-participants-search')) {
+                return true;
+            }
+
+            const headerDiv = participantsSection.parentElement;
+
+            // Create wrapper for positioning
+            const wrapper = document.createElement('div');
+            wrapper.className = 'starwrench-quick-participants-search';
+            wrapper.style.cssText = `
+                position: relative;
+                display: flex;
+                margin-left: auto;
+                align-content: center;
+                align-items: center;
+            `;
+
+            // Create search input
+            searchInput = document.createElement('input');
+            searchInput.type = 'text';
+            searchInput.placeholder = 'Add participant...';
+            searchInput.setAttribute('aria-label', 'Search residents to add');
+            searchInput.style.cssText = `
+                border: 1px solid var(--color-grey-g30, #ccc);
+                height: 28px;
+                background: white;
+                border-radius: var(--control-border-radius, 4px);
+                padding: 0 8px;
+                width: 200px;
+                font-size: 13px;
+                outline: none;
+                box-sizing: border-box;
+            `;
+
+            // Focus styling
+            searchInput.addEventListener('focus', () => {
+                searchInput.style.outline = '2px solid var(--color-blue-b60, #0066cc)';
+                searchInput.style.borderColor = 'var(--color-blue-b60, #0066cc)';
+            });
+
+            searchInput.addEventListener('blur', () => {
+                searchInput.style.outline = 'none';
+                searchInput.style.borderColor = 'var(--color-grey-g30, #ccc)';
+                // Delay closing to allow clicks on results
+                setTimeout(closeResults, 200);
+            });
+
+            // Create results container
+            resultsContainer = createResultsContainer();
+
+            // Assemble
+            wrapper.appendChild(searchInput);
+            wrapper.appendChild(resultsContainer);
+
+            // Insert into header
+            headerDiv.appendChild(wrapper);
+
+            // Add event listeners
+            searchInput.addEventListener('input', (e) => handleSearch(e.target.value));
+            searchInput.addEventListener('keydown', handleKeyDown);
+
+            // Click outside to close
+            document.addEventListener('click', (e) => {
+                if (!wrapper.contains(e.target)) {
+                    closeResults();
+                }
+            });
+
+            console.log('[QuickIncidentParticipants] Search bar added successfully');
+            return true;
+        }
+
+        // Monitor for page changes and try to insert search bar
+        function monitorForParticipantsSection() {
+            let lastUrl = window.location.href;
+
+            function checkAndInsert() {
+                const currentUrl = window.location.href;
+
+                // Check if URL changed or if we're on an incident page
+                if (currentUrl !== lastUrl || currentUrl.includes('incident:')) {
+                    lastUrl = currentUrl;
+
+                    // Try to insert after a delay to ensure DOM is ready
+                    setTimeout(() => {
+                        insertSearchBar();
+                    }, 1000);
+                }
+            }
+
+            // Check initially
+            checkAndInsert();
+
+            // Monitor for changes
+            setInterval(checkAndInsert, 2000);
+
+            // Also monitor DOM changes for dynamic content
+            const observer = new MutationObserver(() => {
+                setTimeout(checkAndInsert, 500);
+            });
+
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+        }
+
+        // Initialize the plugin
+        function initialize() {
+            waitForDatabase(() => {
+                monitorForParticipantsSection();
+            });
+        }
+
+        initialize();
+    }
+
     // RESIDENT DATABASE PLUGIN
     function initResidentDatabasePlugin() {
         const RESIDENT_DB_KEY = 'starWrenchResidentDatabase';
@@ -1763,13 +2128,15 @@
 
         // Initialize the plugin
         function initialize() {
+            // Always load the database from localStorage, regardless of page
+            loadDatabase();
+
             if (!isOnDirectoryPage()) {
-                console.log('[ResidentDB] Not on directory page, plugin inactive');
+                console.log('[ResidentDB] Not on directory page, database loaded from cache');
                 return;
             }
 
             console.log('[ResidentDB] Initializing on directory page');
-            loadDatabase();
 
             // Initial scan after page loads
             setTimeout(() => {
@@ -1922,6 +2289,9 @@
                 break;
             case 'residentSearch':
                 initResidentSearchPlugin();
+                break;
+            case 'quickIncidentParticipants':
+                initQuickIncidentParticipantsPlugin();
                 break;
         }
     }
