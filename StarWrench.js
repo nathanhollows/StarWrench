@@ -1677,6 +1677,116 @@
             }
         }
 
+        // Get current incident ID from StarRez API
+        function getCurrentIncidentId() {
+            if (typeof starrez.sm !== 'undefined' && starrez.sm.GetCurrentlyDisplayedScreenID) {
+                return starrez.sm.GetCurrentlyDisplayedScreenID();
+            }
+            return null;
+        }
+
+        // Add participant to incident via StarRez API
+        function addParticipantToIncident(entryId, displayName) {
+            const incidentId = getCurrentIncidentId();
+            if (!incidentId) {
+                console.error('[QuickIncidentParticipants] Cannot determine incident ID');
+                if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
+                    starrez.ui.ShowAlertMessage('Unable to determine incident ID. Please try again.', 'Error');
+                } else {
+                    alert('Unable to determine incident ID. Please try again.');
+                }
+                return;
+            }
+
+            if (!window.starrez?.ServerRequest) {
+                console.error('[QuickIncidentParticipants] StarRez ServerRequest API not available');
+                if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
+                    starrez.ui.ShowAlertMessage('StarRez API not available. Please refresh the page and try again.', 'Error');
+                } else {
+                    alert('StarRez API not available. Please refresh the page and try again.');
+                }
+                return;
+            }
+
+            // Prepare data structure for the API call
+            const data = {
+                parentID: parseInt(incidentId, 10),
+                vm: {
+                    __ChangedFields: [
+                        "IncidentInvolvementID", "Reported", "IdentityKnown", "EntryID", "Name",
+                        "Age", "GenderEnum", "Height", "Weight", "HairColour", "EyeColour",
+                        "Race", "Religion", "Ethnicity", "Demographic", "Comments",
+                        "LinkRelationship", "WorkflowID"
+                    ],
+                    IncidentInvolvementID: "0",
+                    Reported: false,
+                    IdentityKnown: true,
+                    EntryID: entryId.toString(),
+                    Name: "",
+                    Age: "",
+                    GenderEnum: "0",
+                    Height: "",
+                    Weight: "",
+                    HairColour: "",
+                    EyeColour: "",
+                    Race: "",
+                    Religion: "",
+                    Ethnicity: "",
+                    Demographic: "",
+                    Comments: "",
+                    LinkRelationship: "",
+                    WorkflowID: "0"
+                },
+                handler: {
+                    _error: {
+                        _autoFix: false,
+                        _autoIgnore: false
+                    }
+                }
+            };
+
+            // Show loading state on the search input
+            if (searchInput) {
+                searchInput.disabled = true;
+                searchInput.placeholder = 'Adding participant...';
+                searchInput.style.opacity = '0.6';
+            }
+
+            // Use StarRez's ServerRequest API to add the participant
+            const call = new starrez.ServerRequest("CampusLife", "IncidentEntry", "New", data);
+
+            call.Request({
+                ShowLoading: true
+            }).done(response => {
+                console.log(`[QuickIncidentParticipants] Successfully added participant: ${displayName}`);
+
+                // Refresh the current section to show the new participant
+                if (typeof starrez.sm !== 'undefined' && starrez.sm.RefreshCurrentSection) {
+                    starrez.sm.RefreshCurrentSection();
+                } else {
+                    // Fallback: trigger the same event that happens after manual save
+                    starrez.FireEvent?.('DBObjectEvent', 'incident', parseInt(incidentId, 10));
+                }
+
+            }).fail((jqXHR, textStatus, errorThrown) => {
+                console.error('[QuickIncidentParticipants] Error adding participant:', errorThrown);
+
+                // Show user-friendly error message
+                if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
+                    starrez.ui.ShowAlertMessage(`Failed to add ${displayName} to the incident. Please try again or add manually.`, 'Error');
+                } else {
+                    alert(`Failed to add ${displayName} to the incident. Please try again or add manually.`);
+                }
+            }).always(() => {
+                // Restore search input state
+                if (searchInput) {
+                    searchInput.disabled = false;
+                    searchInput.placeholder = 'Add participant...';
+                    searchInput.style.opacity = '1';
+                }
+            });
+        }
+
         // Create the results dropdown
         function createResultsContainer() {
             const container = document.createElement('div');
@@ -1735,8 +1845,7 @@
             item.addEventListener('mousedown', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                // TODO: Add web call here
-                alert('Selected: ' + displayName);
+                addParticipantToIncident(resident.entryId, displayName);
                 closeResults();
                 if (searchInput) searchInput.value = '';
             });
@@ -1857,7 +1966,7 @@
                     if (selectedIndex >= 0 && currentResults[selectedIndex]) {
                         const resident = currentResults[selectedIndex];
                         const displayName = `${resident.namePreferred || resident.nameFirst} ${resident.nameLast}`;
-                        alert('Selected: ' + displayName);
+                        addParticipantToIncident(resident.entryId, displayName);
                         closeResults();
                         if (searchInput) searchInput.value = '';
                     }
