@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.2.7
-// @description  An opinionated and unofficial enhancement suite for StarRez with toggleable features
+// @version      1.3.6
+// @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=starrezhousing.com
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.2.7';
+    const SUITE_VERSION = '1.3.6';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -74,6 +74,11 @@
                 enabled: true,
                 name: '👥 Quick Incident Participants',
                 description: 'Add a search bar in incident Participants section to quickly add residents'
+            },
+            quickIncidentStatus: {
+                enabled: true,
+                name: '🚦 Quick Incident Status',
+                description: 'Add quick status change buttons (In Progress/Close) to incident details'
             }
         }
     };
@@ -226,7 +231,7 @@
                 Reset All Settings
             </button>
             <div style="margin-top: 10px; font-size: 11px; color: #999;">
-                An unofficial and unaffiliated StarRez enhancement suite.
+                StarWrench - unofficial and unaffiliated with StarRez.
             </div>
         `;
 
@@ -260,11 +265,11 @@
             const container = document.querySelector('.habitat-siteheading-buttons');
             if (container && !document.querySelector('#plugin-manager-button')) {
                 const newButton = document.createElement('habitat-header-button');
-                newButton.setAttribute('aria-label', 'Enhancement Suite');
-                newButton.setAttribute('tooltip', 'Enhancement Suite');
+                newButton.setAttribute('aria-label', 'StarWrench');
+                newButton.setAttribute('tooltip', 'StarWrench');
                 newButton.setAttribute('id', 'plugin-manager-button');
                 newButton.setAttribute('icon', 'fa-cogs');
-                newButton.setAttribute('dropdown-heading', 'Enhancement Suite');
+                newButton.setAttribute('dropdown-heading', 'StarWrench');
 
                 newButton.addEventListener('click', () => {
                     createPluginManagerDropdown(container);
@@ -798,11 +803,41 @@
 
             for (const initials of sortedInitials) {
                 const fullName = nameMap[initials];
-                const regex = new RegExp(`\\b${initials}\\b(?![a-zA-Z])`, 'g');
+
+                // Build regex pattern that allows optional dots between letters and trailing dot
+                // e.g., "JD" matches "JD", "J.D", "J.D."
+                const letters = initials.split('');
+                const pattern = letters.map(letter => `${letter}\\.?`).join('');
+
+                // Special cases to exclude from expansion
+                let regex;
+                if (initials === 'CA') {
+                    // Community Advisor: "CA" followed by space and capital letter (e.g., "CA Ido")
+                    regex = new RegExp(`\\b${pattern}(?!\\s+[A-Z])(?![a-zA-Z])`, 'g');
+                } else if (initials === 'ED') {
+                    // ED House: "ED" followed by space and "House"
+                    regex = new RegExp(`\\b${pattern}(?!\\s+House)(?![a-zA-Z])`, 'gi');
+                } else if (initials === 'EH' || initials === 'KF') {
+                    // EH/KF or EH KF: exclude when these appear in combination
+                    // Don't expand "EH" when followed by /KF or space+KF
+                    // Don't expand "KF" when preceded by EH/ or EH+space
+                    if (initials === 'EH') {
+                        regex = new RegExp(`\\b${pattern}(?!\\s*[/]?\\s*K\\.?F\\.?)(?![a-zA-Z])`, 'gi');
+                    } else { // KF
+                        regex = new RegExp(`(?<!E\\.?H\\.?\\s*[/]?\\s*)\\b${pattern}(?![a-zA-Z])`, 'gi');
+                    }
+                } else {
+                    // Normal case: match initials with optional dots, not followed by more letters
+                    regex = new RegExp(`\\b${pattern}(?![a-zA-Z])`, 'g');
+                }
+
                 if (regex.test(modifiedText)) {
-                    modifiedText = modifiedText.replace(regex,
-                        `<span class="initials-highlight" title="${fullName}">${initials}</span><span class="initials-name">(${fullName})</span>`
-                    );
+                    // Reset regex for replacement
+                    regex.lastIndex = 0;
+                    modifiedText = modifiedText.replace(regex, (match) => {
+                        // Preserve the matched text (with or without dots) in the highlight
+                        return `<span class="initials-highlight" title="${fullName}">${match}</span><span class="initials-name">(${fullName})</span>`;
+                    });
                     modified = true;
                 }
             }
@@ -1362,8 +1397,9 @@
                 </div>
             `;
 
-            // Click handler
-            item.addEventListener('click', (e) => {
+            // Click handler (using mousedown to fire before blur event)
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 navigateToResident(resident.entryId);
                 closeResults();
@@ -1630,14 +1666,14 @@
         let selectedIndex = -1;
         let searchTimeout = null;
 
-        // Wait for the resident database to be available
+        // Wait for the resident database to be available and populated
         function waitForDatabase(callback, attempts = 0) {
-            if (window.starWrenchResidentDB) {
+            if (window.starWrenchResidentDB && window.starWrenchResidentDB.getCount() > 0) {
                 callback();
             } else if (attempts < 50) {
                 setTimeout(() => waitForDatabase(callback, attempts + 1), 100);
             } else {
-                console.error('[QuickIncidentParticipants] Resident database not available');
+                console.log('[QuickIncidentParticipants] Resident database not populated yet. Visit Main -> Directory to build the database.');
             }
         }
 
@@ -1695,8 +1731,9 @@
                 </div>
             `;
 
-            // Click handler
-            item.addEventListener('click', (e) => {
+            // Click handler (using mousedown to fire before blur event)
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 // TODO: Add web call here
                 alert('Selected: ' + displayName);
@@ -1739,8 +1776,14 @@
 
             if (results.length === 0) {
                 const noResults = document.createElement('div');
-                noResults.style.cssText = 'padding: 16px 12px; text-align: center; color: var(--color-grey-g60, #666);';
-                noResults.textContent = 'No residents found';
+                noResults.style.cssText = 'padding: 16px 12px; text-align: center; color: var(--color-grey-g60, #666); font-size: 12px; line-height: 1.5;';
+                noResults.innerHTML = `
+                    <div style="margin-bottom: 6px;">No residents found</div>
+                    <div style="font-size: 11px; color: var(--color-grey-g50, #999);">
+                        Search is populated from Main → Directory.<br>
+                        Visit there to expand the database.
+                    </div>
+                `;
                 resultsContainer.appendChild(noResults);
                 resultsContainer.style.display = 'block';
                 return;
@@ -1957,6 +2000,223 @@
             waitForDatabase(() => {
                 monitorForParticipantsSection();
             });
+        }
+
+        initialize();
+    }
+
+    // QUICK INCIDENT STATUS PLUGIN
+    function initQuickIncidentStatusPlugin() {
+        const STATUS_IDS = {
+            CLOSED: '0',
+            OPEN: '1',
+            IN_PROGRESS: '2'
+        };
+
+        // Get current incident ID from URL
+        function getCurrentIncidentId() {
+            const hash = window.location.hash;
+            if (!hash || !hash.includes('incident:')) return null;
+            const match = hash.match(/incident:(\d+)/);
+            return match ? match[1] : null;
+        }
+
+        // Get current incident status
+        function getCurrentStatus() {
+            const statusElement = document.querySelector('span.field.view-control[data-name="IncidentStatusID"]');
+            if (!statusElement) return null;
+            return statusElement.getAttribute('data-id');
+        }
+
+        // Change incident status via API
+        function changeIncidentStatus(incidentId, newStatusId, buttonText) {
+            if (!window.starrez?.ServerRequest) {
+                console.error('[QuickIncidentStatus] StarRez ServerRequest API not available');
+                return;
+            }
+
+            const data = {
+                id: parseInt(incidentId, 10),
+                vm: {
+                    __ChangedFields: ["IncidentID", "IncidentStatusID"],
+                    IncidentID: incidentId.toString(),
+                    IncidentStatusID: newStatusId.toString()
+                },
+                handler: {
+                    _error: {
+                        _autoFix: false,
+                        _autoIgnore: false
+                    }
+                }
+            };
+
+            // Show loading state
+            const buttons = document.querySelectorAll('.starwrench-status-button');
+            buttons.forEach(btn => {
+                btn.disabled = true;
+                btn.style.opacity = '0.6';
+            });
+
+            // Use StarRez's ServerRequest API
+            const call = new starrez.ServerRequest("CampusLife", "IncidentMain", "EditData", data);
+
+            call.Request({
+                ShowLoading: true
+            }).done(response => {
+                console.log(`[QuickIncidentStatus] Successfully changed status to ${buttonText}`);
+
+                // Use StarRez's built-in screen refresh
+                if (typeof starrez.sm !== 'undefined' && starrez.sm.RefreshCurrentScreen) {
+                    starrez.sm.RefreshCurrentScreen();
+                } else {
+                    // Fallback: trigger the same event that happens after manual save
+                    starrez.FireEvent?.('DBObjectEvent', 'incident', parseInt(incidentId, 10));
+                }
+            }).fail((jqXHR, textStatus, errorThrown) => {
+                console.error('[QuickIncidentStatus] Error changing status:', errorThrown);
+
+                // Show user-friendly error message
+                if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
+                    starrez.ui.ShowAlertMessage(`Failed to change status to ${buttonText}. Please try again or use the Edit button.`, 'Error');
+                } else {
+                    alert(`Failed to change status to ${buttonText}. Please try again or use the Edit button.`);
+                }
+
+                // Re-enable buttons on error
+                buttons.forEach(btn => {
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                });
+            });
+        }
+
+        // Create a status button
+        function createStatusButton(buttonText, statusName, statusId, incidentId) {
+            const button = document.createElement('button');
+            button.className = 'sr_button_primary sr_button starwrench-status-button';
+            button.type = 'button';
+            button.setAttribute('aria-label', buttonText);
+            button.setAttribute('title', `Change incident status to "${statusName}"`);
+
+            // Add icon
+            const icon = document.createElement('i');
+            icon.className = 'fa Functions sr_button_primary_icon';
+            icon.setAttribute('role', 'presentation');
+
+            // Add caption
+            const caption = document.createElement('span');
+            caption.className = 'ui_button_caption sr_button_primary_caption';
+            caption.textContent = buttonText;
+
+            button.appendChild(icon);
+            button.appendChild(caption);
+
+            button.addEventListener('click', () => {
+                if (confirm(`Change incident status to "${statusName}"?`)) {
+                    changeIncidentStatus(incidentId, statusId, statusName);
+                }
+            });
+
+            return button;
+        }
+
+        // Insert status buttons
+        function insertStatusButtons() {
+            // Check if we're on an incident page
+            const incidentId = getCurrentIncidentId();
+            if (!incidentId) return false;
+
+            // Find the button bar
+            const buttonBar = document.querySelector('.fieldset-block .header .button-bar');
+            if (!buttonBar) return false;
+
+            // Check if buttons already exist
+            if (buttonBar.querySelector('.starwrench-status-button')) {
+                return true;
+            }
+
+            // Get current status
+            const currentStatus = getCurrentStatus();
+            if (!currentStatus) return false;
+
+            // Don't show buttons if incident is closed
+            if (currentStatus === STATUS_IDS.CLOSED) {
+                console.log('[QuickIncidentStatus] Incident is closed, not showing buttons');
+                return true;
+            }
+
+            // Create appropriate buttons based on status
+            let buttonsToAdd = [];
+
+            if (currentStatus === STATUS_IDS.OPEN) {
+                // Show both "Mark as In Progress" and "Close" buttons
+                buttonsToAdd.push(createStatusButton('Mark as In Progress', 'In Progress', STATUS_IDS.IN_PROGRESS, incidentId));
+                buttonsToAdd.push(createStatusButton('Close', 'Closed', STATUS_IDS.CLOSED, incidentId));
+            } else if (currentStatus === STATUS_IDS.IN_PROGRESS) {
+                // Show only "Close" button
+                buttonsToAdd.push(createStatusButton('Close', 'Closed', STATUS_IDS.CLOSED, incidentId));
+            }
+
+            // Insert buttons before the first child (Edit button)
+            buttonsToAdd.forEach(button => {
+                buttonBar.insertBefore(button, buttonBar.firstChild);
+            });
+
+            console.log(`[QuickIncidentStatus] Added ${buttonsToAdd.length} button(s) for incident ${incidentId}`);
+            return true;
+        }
+
+        // Remove existing status buttons (for cleanup on status change)
+        function removeStatusButtons() {
+            const buttons = document.querySelectorAll('.starwrench-status-button');
+            buttons.forEach(button => button.remove());
+        }
+
+        // Monitor for page changes and incident details updates
+        function monitorForIncidentDetails() {
+            let lastUrl = window.location.href;
+            let lastStatus = null;
+
+            function checkAndInsert() {
+                const currentUrl = window.location.href;
+                const currentStatus = getCurrentStatus();
+
+                // Check if URL changed or status changed
+                if (currentUrl !== lastUrl || currentStatus !== lastStatus) {
+                    lastUrl = currentUrl;
+                    lastStatus = currentStatus;
+
+                    // Remove old buttons and add new ones
+                    removeStatusButtons();
+
+                    if (currentUrl.includes('incident:')) {
+                        setTimeout(() => {
+                            insertStatusButtons();
+                        }, 1000);
+                    }
+                }
+            }
+
+            // Check initially
+            checkAndInsert();
+
+            // Monitor for changes
+            setInterval(checkAndInsert, 2000);
+
+            // Also monitor DOM changes for when incident details reload
+            const observer = new MutationObserver(() => {
+                setTimeout(checkAndInsert, 500);
+            });
+
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+        }
+
+        // Initialize the plugin
+        function initialize() {
+            monitorForIncidentDetails();
         }
 
         initialize();
@@ -2292,6 +2552,9 @@
                 break;
             case 'quickIncidentParticipants':
                 initQuickIncidentParticipantsPlugin();
+                break;
+            case 'quickIncidentStatus':
+                initQuickIncidentStatusPlugin();
                 break;
         }
     }

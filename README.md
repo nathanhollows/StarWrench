@@ -24,7 +24,7 @@ Copy record IDs from dashboard sections to clipboard for easy export and externa
 Add search functionality to the Dashboard dropdown menu for quick navigation.
 
 ### 👤 Initials Expander
-Expands initials in shift and incident reports for easier reading and identification.
+Expands initials in shift and incident reports for easier reading and identification. Supports initials with optional dots between letters (e.g., J.D. or JD). Intelligently excludes common abbreviations like "CA [Name]" (Community Advisor), "ED House", and "EH/KF" combinations.
 
 ### 📱 Phone Formatter
 Automatically format phone numbers with proper spacing and grouping for improved readability.
@@ -34,6 +34,12 @@ Color codes your color codes. Makes words like "Orange" and "Yellow" appear in t
 
 ### 🔗 Incident Auto Linker
 Automatically converts "incident ######" or "report ######" text into clickable links for quick navigation.
+
+### 👥 Quick Incident Participants
+Adds a fast search bar to the Participants section on incident details pages. Search and select residents from the local database to quickly add them to incidents. Features keyboard navigation, live search, and automatic clearing after selection. Only appears when the resident database has been populated.
+
+### 🚦 Quick Incident Status
+Adds action buttons to incident details for one-click status changes. Shows "Mark as In Progress" and "Close" buttons for Open incidents, or just "Close" for In Progress incidents. No buttons shown for closed incidents. Uses StarRez's native API for reliable updates and automatic screen refresh.
 
 ## Background Services
 
@@ -76,7 +82,7 @@ StarWrench includes a settings interface where you can toggle individual plugins
 ## Compatibility
 
 - **Target site**: StarRez Web interface (`https://vuw.starrezhousing.com/StarRezWeb/*`)
-- **Version**: 1.2.5
+- **Version**: 1.3.6
 - **Browsers**: All modern browsers with userscript manager support
 - **Run timing**: Document idle (loads after page content)
 
