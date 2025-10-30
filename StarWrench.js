@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.3.6
+// @version      1.4.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.3.6';
+    const SUITE_VERSION = '1.4.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -70,10 +70,10 @@
                 name: '🔎 Resident Search',
                 description: 'Replaces global search with a fast resident lookup powered by the local database'
             },
-            quickIncidentParticipants: {
+            quickAddParticipants: {
                 enabled: true,
-                name: '👥 Quick Incident Participants',
-                description: 'Add a search bar in incident Participants section to quickly add residents'
+                name: '👥 Quick Add Participants',
+                description: 'Add a search bar to quickly add residents to incident Participants or program Attendees'
             },
             quickIncidentStatus: {
                 enabled: true,
@@ -1658,8 +1658,8 @@
         initialize();
     }
 
-    // QUICK INCIDENT PARTICIPANTS PLUGIN
-    function initQuickIncidentParticipantsPlugin() {
+    // QUICK ADD PARTICIPANTS PLUGIN
+    function initQuickAddParticipantsPlugin() {
         let searchInput = null;
         let resultsContainer = null;
         let currentResults = [];
@@ -1673,33 +1673,40 @@
             } else if (attempts < 50) {
                 setTimeout(() => waitForDatabase(callback, attempts + 1), 100);
             } else {
-                console.log('[QuickIncidentParticipants] Resident database not populated yet. Visit Main -> Directory to build the database.');
+                console.log('[QuickAddParticipants] Resident database not populated yet. Visit Main -> Directory to build the database.');
             }
         }
 
-        // Get current incident ID from StarRez API
-        function getCurrentIncidentId() {
+        // Get current screen ID and type from StarRez API
+        function getCurrentScreenInfo() {
             if (typeof starrez.sm !== 'undefined' && starrez.sm.GetCurrentlyDisplayedScreenID) {
-                return starrez.sm.GetCurrentlyDisplayedScreenID();
+                const screenId = starrez.sm.GetCurrentlyDisplayedScreenID();
+                const hash = window.location.hash;
+
+                if (hash.includes('incident:')) {
+                    return { id: screenId, type: 'incident' };
+                } else if (hash.includes('program:') && hash.includes(':attendees')) {
+                    return { id: screenId, type: 'program' };
+                }
             }
             return null;
         }
 
-        // Add participant to incident via StarRez API
-        function addParticipantToIncident(entryId, displayName) {
-            const incidentId = getCurrentIncidentId();
-            if (!incidentId) {
-                console.error('[QuickIncidentParticipants] Cannot determine incident ID');
+        // Add participant to incident or program via StarRez API
+        function addParticipant(entryId, displayName) {
+            const screenInfo = getCurrentScreenInfo();
+            if (!screenInfo) {
+                console.error('[QuickAddParticipants] Cannot determine screen ID or type');
                 if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
-                    starrez.ui.ShowAlertMessage('Unable to determine incident ID. Please try again.', 'Error');
+                    starrez.ui.ShowAlertMessage('Unable to determine current screen. Please try again.', 'Error');
                 } else {
-                    alert('Unable to determine incident ID. Please try again.');
+                    alert('Unable to determine current screen. Please try again.');
                 }
                 return;
             }
 
             if (!window.starrez?.ServerRequest) {
-                console.error('[QuickIncidentParticipants] StarRez ServerRequest API not available');
+                console.error('[QuickAddParticipants] StarRez ServerRequest API not available');
                 if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
                     starrez.ui.ShowAlertMessage('StarRez API not available. Please refresh the page and try again.', 'Error');
                 } else {
@@ -1708,80 +1715,129 @@
                 return;
             }
 
-            // Prepare data structure for the API call
-            const data = {
-                parentID: parseInt(incidentId, 10),
-                vm: {
-                    __ChangedFields: [
-                        "IncidentInvolvementID", "Reported", "IdentityKnown", "EntryID", "Name",
-                        "Age", "GenderEnum", "Height", "Weight", "HairColour", "EyeColour",
-                        "Race", "Religion", "Ethnicity", "Demographic", "Comments",
-                        "LinkRelationship", "WorkflowID"
-                    ],
-                    IncidentInvolvementID: "0",
-                    Reported: false,
-                    IdentityKnown: true,
-                    EntryID: entryId.toString(),
-                    Name: "",
-                    Age: "",
-                    GenderEnum: "0",
-                    Height: "",
-                    Weight: "",
-                    HairColour: "",
-                    EyeColour: "",
-                    Race: "",
-                    Religion: "",
-                    Ethnicity: "",
-                    Demographic: "",
-                    Comments: "",
-                    LinkRelationship: "",
-                    WorkflowID: "0"
-                },
-                handler: {
-                    _error: {
-                        _autoFix: false,
-                        _autoIgnore: false
+            let data, endpoint;
+
+            if (screenInfo.type === 'incident') {
+                // Incident data structure
+                data = {
+                    parentID: parseInt(screenInfo.id, 10),
+                    vm: {
+                        __ChangedFields: [
+                            "IncidentInvolvementID", "Reported", "IdentityKnown", "EntryID", "Name",
+                            "Age", "GenderEnum", "Height", "Weight", "HairColour", "EyeColour",
+                            "Race", "Religion", "Ethnicity", "Demographic", "Comments",
+                            "LinkRelationship", "WorkflowID"
+                        ],
+                        IncidentInvolvementID: "0",
+                        Reported: false,
+                        IdentityKnown: true,
+                        EntryID: entryId.toString(),
+                        Name: "",
+                        Age: "",
+                        GenderEnum: "0",
+                        Height: "",
+                        Weight: "",
+                        HairColour: "",
+                        EyeColour: "",
+                        Race: "",
+                        Religion: "",
+                        Ethnicity: "",
+                        Demographic: "",
+                        Comments: "",
+                        LinkRelationship: "",
+                        WorkflowID: "0"
+                    },
+                    handler: {
+                        _error: {
+                            _autoFix: false,
+                            _autoIgnore: false
+                        }
                     }
-                }
-            };
+                };
+                endpoint = ["CampusLife", "IncidentEntry", "New"];
+            } else if (screenInfo.type === 'program') {
+                // Program data structure
+                data = {
+                    parentID: parseInt(screenInfo.id, 10),
+                    vm: {
+                        __ChangedFields: ["EntryID", "Status", "CheckInDate", "CheckOutDate", "WorkflowID"],
+                        EntryID: entryId.toString(),
+                        Status: "0",
+                        CheckInDate: "",
+                        CheckOutDate: "",
+                        WorkflowID: "0"
+                    },
+                    handler: {
+                        _error: {
+                            _autoFix: false,
+                            _autoIgnore: false
+                        }
+                    }
+                };
+                endpoint = ["CampusLife", "ProgramEntry", "New"];
+            }
 
             // Show loading state on the search input
             if (searchInput) {
                 searchInput.disabled = true;
-                searchInput.placeholder = 'Adding participant...';
+                searchInput.placeholder = screenInfo.type === 'incident' ? 'Adding participant...' : 'Adding attendee...';
                 searchInput.style.opacity = '0.6';
             }
 
             // Use StarRez's ServerRequest API to add the participant
-            const call = new starrez.ServerRequest("CampusLife", "IncidentEntry", "New", data);
+            const call = new starrez.ServerRequest(endpoint[0], endpoint[1], endpoint[2], data);
 
             call.Request({
                 ShowLoading: true
             }).done(response => {
-                console.log(`[QuickIncidentParticipants] Successfully added participant: ${displayName}`);
+                console.log(`[QuickAddParticipants] Successfully added participant: ${displayName} to ${screenInfo.type}`);
 
                 // Refresh the current section to show the new participant
                 if (typeof starrez.sm !== 'undefined' && starrez.sm.RefreshCurrentSection) {
                     starrez.sm.RefreshCurrentSection();
                 } else {
                     // Fallback: trigger the same event that happens after manual save
-                    starrez.FireEvent?.('DBObjectEvent', 'incident', parseInt(incidentId, 10));
+                    starrez.FireEvent?.('DBObjectEvent', screenInfo.type, parseInt(screenInfo.id, 10));
                 }
 
-            }).fail((jqXHR, textStatus, errorThrown) => {
-                console.error('[QuickIncidentParticipants] Error adding participant:', errorThrown);
+                // Auto-focus the search input after refresh for next participant
+                setTimeout(() => {
+                    if (searchInput && document.contains(searchInput)) {
+                        searchInput.focus();
+                        searchInput.select();
+                    }
+                }, 1000);
 
-                // Show user-friendly error message
-                if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
-                    starrez.ui.ShowAlertMessage(`Failed to add ${displayName} to the incident. Please try again or add manually.`, 'Error');
+            }).fail((jqXHR, textStatus, errorThrown) => {
+                console.error('[QuickAddParticipants] Error adding participant:', errorThrown);
+
+                const contextName = screenInfo.type === 'incident' ? 'incident' : 'program';
+
+                // Check if this is a data rule violation (duplicate participant)
+                if (jqXHR.responseText && jqXHR.responseText.includes('HandleDataRuleViolation')) {
+                    console.log(`[QuickAddParticipants] ${displayName} is already a participant in this ${contextName}`);
+
+                    // StarRez will show its own popup for data rule violations
+                    // We don't need to show an additional error message
+                    // The user will see the StarRez popup and can dismiss it
+
+                    // Just clear the search input and continue
+                    if (searchInput) {
+                        searchInput.value = '';
+                    }
                 } else {
-                    alert(`Failed to add ${displayName} to the incident. Please try again or add manually.`);
+                    // Show user-friendly error message for other types of errors
+                    if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
+                        starrez.ui.ShowAlertMessage(`Failed to add ${displayName} to the ${contextName}. Please try again or add manually.`, 'Error');
+                    } else {
+                        alert(`Failed to add ${displayName} to the ${contextName}. Please try again or add manually.`);
+                    }
                 }
             }).always(() => {
                 // Restore search input state
                 if (searchInput) {
                     searchInput.disabled = false;
-                    searchInput.placeholder = 'Add participant...';
+                    searchInput.placeholder = screenInfo.type === 'incident' ? 'Add participant...' : 'Add attendee...';
                     searchInput.style.opacity = '1';
                 }
             });
@@ -1808,6 +1864,7 @@
                 z-index: 10000;
                 display: none;
                 margin-top: -1px;
+                text-align: left;
             `;
             return container;
         }
@@ -1845,7 +1902,7 @@
             item.addEventListener('mousedown', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                addParticipantToIncident(resident.entryId, displayName);
+                addParticipant(resident.entryId, displayName);
                 closeResults();
                 if (searchInput) searchInput.value = '';
             });
@@ -1929,7 +1986,7 @@
 
             searchTimeout = setTimeout(() => {
                 if (!window.starWrenchResidentDB) {
-                    console.error('[QuickIncidentParticipants] Database not available');
+                    console.error('[QuickAddParticipants] Database not available');
                     return;
                 }
 
@@ -1966,7 +2023,7 @@
                     if (selectedIndex >= 0 && currentResults[selectedIndex]) {
                         const resident = currentResults[selectedIndex];
                         const displayName = `${resident.namePreferred || resident.nameFirst} ${resident.nameLast}`;
-                        addParticipantToIncident(resident.entryId, displayName);
+                        addParticipant(resident.entryId, displayName);
                         closeResults();
                         if (searchInput) searchInput.value = '';
                     }
@@ -1980,44 +2037,83 @@
             }
         }
 
-        // Insert search bar into the Participants section
+        // Insert search bar into the Participants or Attendees section
         function insertSearchBar() {
-            // Check if we're on an incident page
-            if (!window.location.hash || !window.location.hash.includes('incident:')) {
+            const screenInfo = getCurrentScreenInfo();
+            if (!screenInfo) {
                 return false;
             }
 
-            // Find the Participants section
-            const participantsSection = Array.from(document.querySelectorAll('.fieldset-block .caption')).find(
-                caption => caption.textContent.trim() === 'Participants'
-            );
+            let targetSection, targetContainer, className;
 
-            if (!participantsSection) {
+            if (screenInfo.type === 'incident') {
+                // Find the Participants section
+                targetSection = Array.from(document.querySelectorAll('.fieldset-block .caption')).find(
+                    caption => caption.textContent.trim() === 'Participants'
+                );
+
+                if (!targetSection) {
+                    return false;
+                }
+
+                targetContainer = targetSection.parentElement;
+                className = 'starwrench-quick-participants-search';
+            } else if (screenInfo.type === 'program') {
+                // Find the Attendees section
+                targetSection = Array.from(document.querySelectorAll('.caption.ui-fieldset-caption')).find(
+                    caption => caption.textContent.trim() === 'Attendees'
+                );
+
+                if (!targetSection) {
+                    return false;
+                }
+
+                // For programs, we need to insert after the record count
+                const header = targetSection.parentElement;
+                const buttonBar = header.querySelector('.button-bar');
+                const paginationContainer = buttonBar?.querySelector('.pagination-container');
+
+                if (!paginationContainer) {
+                    return false;
+                }
+
+                targetContainer = paginationContainer;
+                className = 'starwrench-quick-attendees-search';
+            } else {
                 return false;
             }
 
             // Check if search bar already exists
-            if (participantsSection.parentElement.querySelector('.starwrench-quick-participants-search')) {
+            if (targetContainer.querySelector(`.${className}`)) {
                 return true;
             }
 
-            const headerDiv = participantsSection.parentElement;
-
             // Create wrapper for positioning
             const wrapper = document.createElement('div');
-            wrapper.className = 'starwrench-quick-participants-search';
-            wrapper.style.cssText = `
-                position: relative;
-                display: flex;
-                margin-left: auto;
-                align-content: center;
-                align-items: center;
-            `;
+            wrapper.className = className;
+
+            if (screenInfo.type === 'incident') {
+                wrapper.style.cssText = `
+                    position: relative;
+                    display: flex;
+                    margin-left: auto;
+                    align-content: center;
+                    align-items: center;
+                `;
+            } else if (screenInfo.type === 'program') {
+                wrapper.style.cssText = `
+                    position: relative;
+                    display: inline-flex;
+                    margin-left: 15px;
+                    align-content: center;
+                    align-items: center;
+                `;
+            }
 
             // Create search input
             searchInput = document.createElement('input');
             searchInput.type = 'text';
-            searchInput.placeholder = 'Add participant...';
+            searchInput.placeholder = screenInfo.type === 'incident' ? 'Add participant...' : 'Add attendee...';
             searchInput.setAttribute('aria-label', 'Search residents to add');
             searchInput.style.cssText = `
                 border: 1px solid var(--color-grey-g30, #ccc);
@@ -2051,8 +2147,8 @@
             wrapper.appendChild(searchInput);
             wrapper.appendChild(resultsContainer);
 
-            // Insert into header
-            headerDiv.appendChild(wrapper);
+            // Insert into target container
+            targetContainer.appendChild(wrapper);
 
             // Add event listeners
             searchInput.addEventListener('input', (e) => handleSearch(e.target.value));
@@ -2065,19 +2161,26 @@
                 }
             });
 
-            console.log('[QuickIncidentParticipants] Search bar added successfully');
+            // Auto-focus for programs since that's the main purpose of the page
+            if (screenInfo.type === 'program') {
+                setTimeout(() => {
+                    searchInput.focus();
+                }, 100);
+            }
+
+            console.log(`[QuickAddParticipants] Search bar added successfully for ${screenInfo.type}`);
             return true;
         }
 
         // Monitor for page changes and try to insert search bar
-        function monitorForParticipantsSection() {
+        function monitorForSections() {
             let lastUrl = window.location.href;
 
             function checkAndInsert() {
                 const currentUrl = window.location.href;
 
-                // Check if URL changed or if we're on an incident page
-                if (currentUrl !== lastUrl || currentUrl.includes('incident:')) {
+                // Check if URL changed or if we're on a relevant page
+                if (currentUrl !== lastUrl || currentUrl.includes('incident:') || (currentUrl.includes('program:') && currentUrl.includes(':attendees'))) {
                     lastUrl = currentUrl;
 
                     // Try to insert after a delay to ensure DOM is ready
@@ -2107,7 +2210,7 @@
         // Initialize the plugin
         function initialize() {
             waitForDatabase(() => {
-                monitorForParticipantsSection();
+                monitorForSections();
             });
         }
 
@@ -2659,8 +2762,8 @@
             case 'residentSearch':
                 initResidentSearchPlugin();
                 break;
-            case 'quickIncidentParticipants':
-                initQuickIncidentParticipantsPlugin();
+            case 'quickAddParticipants':
+                initQuickAddParticipantsPlugin();
                 break;
             case 'quickIncidentStatus':
                 initQuickIncidentStatusPlugin();
