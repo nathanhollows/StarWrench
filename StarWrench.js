@@ -141,7 +141,7 @@
     }
 
     function isPluginEnabled(pluginName) {
-        return currentSettings.plugins[pluginName]?.enabled || false;
+        return currentSettings.plugins[pluginName] && currentSettings.plugins[pluginName].enabled || false;
     }
 
 
@@ -212,9 +212,13 @@
                 if (e.target.checked) {
                     // Initialize the plugin
                     initializePlugin(key);
-                    starrez.ui?.ShowAlertMessage?.(`${plugin.name} enabled! Refresh the page for full functionality.`, 'Plugin Enabled');
+                    if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
+                        starrez.ui.ShowAlertMessage(`${plugin.name} enabled! Refresh the page for full functionality.`, 'Plugin Enabled');
+                    }
                 } else {
-                    starrez.ui?.ShowAlertMessage?.(`${plugin.name} disabled! Refresh the page to fully remove functionality.`, 'Plugin Disabled');
+                    if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
+                        starrez.ui.ShowAlertMessage(`${plugin.name} disabled! Refresh the page to fully remove functionality.`, 'Plugin Disabled');
+                    }
                 }
             });
 
@@ -241,7 +245,9 @@
                 saveSettings();
                 dropdown.remove();
                 createPluginManagerDropdown(container);
-                starrez.ui?.ShowAlertMessage?.('Settings reset to defaults. Refresh the page for changes to take effect.', 'Settings Reset');
+                if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
+                    starrez.ui.ShowAlertMessage('Settings reset to defaults. Refresh the page for changes to take effect.', 'Settings Reset');
+                }
             }
         });
 
@@ -1660,6 +1666,7 @@
 
     // QUICK ADD PARTICIPANTS PLUGIN
     function initQuickAddParticipantsPlugin() {
+
         let searchInput = null;
         let resultsContainer = null;
         let currentResults = [];
@@ -1679,17 +1686,30 @@
 
         // Get current screen ID and type from StarRez API
         function getCurrentScreenInfo() {
-            if (typeof starrez.sm !== 'undefined' && starrez.sm.GetCurrentlyDisplayedScreenID) {
-                const screenId = starrez.sm.GetCurrentlyDisplayedScreenID();
+            try {
+                // First check the URL hash to see if we're even on a relevant page
                 const hash = window.location.hash;
 
+                let pageType = null;
                 if (hash && hash.includes('incident:')) {
-                    return { id: screenId, type: 'incident' };
+                    pageType = 'incident';
                 } else if (hash && hash.includes('program:') && hash.includes(':attendees')) {
-                    return { id: screenId, type: 'program' };
+                    pageType = 'program';
+                } else {
+                    return null;
                 }
+
+                // Only call GetCurrentlyDisplayedScreenID if we're on a relevant page
+                if (typeof starrez === 'undefined' || typeof starrez.sm === 'undefined' || typeof starrez.sm.GetCurrentlyDisplayedScreenID !== 'function') {
+                    return null;
+                }
+
+                const screenId = starrez.sm.GetCurrentlyDisplayedScreenID();
+                return { id: screenId, type: pageType };
+            } catch (error) {
+                console.error('[QuickAddParticipants] Error in getCurrentScreenInfo:', error);
+                return null;
             }
-            return null;
         }
 
         // Add participant to incident or program via StarRez API
@@ -1705,7 +1725,7 @@
                 return;
             }
 
-            if (!window.starrez?.ServerRequest) {
+            if (!window.starrez || !window.starrez.ServerRequest) {
                 console.error('[QuickAddParticipants] StarRez ServerRequest API not available');
                 if (typeof starrez.ui !== 'undefined' && starrez.ui.ShowAlertMessage) {
                     starrez.ui.ShowAlertMessage('StarRez API not available. Please refresh the page and try again.', 'Error');
@@ -1797,7 +1817,9 @@
                     starrez.sm.RefreshCurrentSection();
                 } else {
                     // Fallback: trigger the same event that happens after manual save
-                    starrez.FireEvent?.('DBObjectEvent', screenInfo.type, parseInt(screenInfo.id, 10));
+                    if (typeof starrez.FireEvent !== 'undefined') {
+                        starrez.FireEvent('DBObjectEvent', screenInfo.type, parseInt(screenInfo.id, 10));
+                    }
                 }
 
                 // Auto-focus the search input after refresh for next participant
@@ -2039,10 +2061,11 @@
 
         // Insert search bar into the Participants or Attendees section
         function insertSearchBar() {
-            const screenInfo = getCurrentScreenInfo();
-            if (!screenInfo) {
-                return false;
-            }
+            try {
+                const screenInfo = getCurrentScreenInfo();
+                if (!screenInfo) {
+                    return false;
+                }
 
             let targetSection, targetContainer, className;
 
@@ -2071,7 +2094,7 @@
                 // For programs, we need to insert after the record count
                 const header = targetSection.parentElement;
                 const buttonBar = header.querySelector('.button-bar');
-                const paginationContainer = buttonBar?.querySelector('.pagination-container');
+                const paginationContainer = buttonBar ? buttonBar.querySelector('.pagination-container') : null;
 
                 if (!paginationContainer) {
                     return false;
@@ -2168,50 +2191,66 @@
                 }, 100);
             }
 
-            console.log(`[QuickAddParticipants] Search bar added successfully for ${screenInfo.type}`);
             return true;
+            } catch (error) {
+                console.error('[QuickAddParticipants] Error in insertSearchBar:', error);
+                return false;
+            }
         }
 
         // Monitor for page changes and try to insert search bar
         function monitorForSections() {
-            let lastUrl = window.location.href;
+            try {
+                let lastUrl = window.location.href;
 
-            function checkAndInsert() {
-                const currentUrl = window.location.href;
+                function checkAndInsert() {
+                    try {
+                        const currentUrl = window.location.href;
 
-                // Check if URL changed or if we're on a relevant page
-                if (currentUrl !== lastUrl || currentUrl.includes('incident:') || (currentUrl.includes('program:') && currentUrl.includes(':attendees'))) {
-                    lastUrl = currentUrl;
+                        // Check if URL changed or if we're on a relevant page
+                        if (currentUrl !== lastUrl || currentUrl.includes('incident:') || (currentUrl.includes('program:') && currentUrl.includes(':attendees'))) {
+                            lastUrl = currentUrl;
 
-                    // Try to insert after a delay to ensure DOM is ready
-                    setTimeout(() => {
-                        insertSearchBar();
-                    }, 1000);
+                            // Try to insert after a delay to ensure DOM is ready
+                            setTimeout(() => {
+                                insertSearchBar();
+                            }, 1000);
+                        }
+                    } catch (error) {
+                        console.error('[QuickAddParticipants] Error in checkAndInsert:', error);
+                    }
                 }
+
+                // Check initially
+                checkAndInsert();
+
+                // Monitor for changes
+                setInterval(checkAndInsert, 2000);
+
+                // Also monitor DOM changes for dynamic content
+                const observer = new MutationObserver(() => {
+                    setTimeout(checkAndInsert, 500);
+                });
+
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true
+                });
+
+            } catch (error) {
+                console.error('[QuickAddParticipants] Error in monitorForSections:', error);
             }
-
-            // Check initially
-            checkAndInsert();
-
-            // Monitor for changes
-            setInterval(checkAndInsert, 2000);
-
-            // Also monitor DOM changes for dynamic content
-            const observer = new MutationObserver(() => {
-                setTimeout(checkAndInsert, 500);
-            });
-
-            observer.observe(document.body, {
-                childList: true,
-                subtree: true
-            });
         }
 
         // Initialize the plugin
         function initialize() {
-            waitForDatabase(() => {
-                monitorForSections();
-            });
+            try {
+                waitForDatabase(() => {
+                    monitorForSections();
+                });
+            } catch (error) {
+                console.error('[QuickAddParticipants] Error in initialize:', error);
+            }
         }
 
         initialize();
@@ -2242,7 +2281,7 @@
 
         // Change incident status via API
         function changeIncidentStatus(incidentId, newStatusId, buttonText) {
-            if (!window.starrez?.ServerRequest) {
+            if (!window.starrez || !window.starrez.ServerRequest) {
                 console.error('[QuickIncidentStatus] StarRez ServerRequest API not available');
                 return;
             }
@@ -2282,7 +2321,9 @@
                     starrez.sm.RefreshCurrentScreen();
                 } else {
                     // Fallback: trigger the same event that happens after manual save
-                    starrez.FireEvent?.('DBObjectEvent', 'incident', parseInt(incidentId, 10));
+                    if (typeof starrez.FireEvent !== 'undefined') {
+                        starrez.FireEvent('DBObjectEvent', 'incident', parseInt(incidentId, 10));
+                    }
                 }
             }).fail((jqXHR, textStatus, errorThrown) => {
                 console.error('[QuickIncidentStatus] Error changing status:', errorThrown);
