@@ -1683,9 +1683,9 @@
                 const screenId = starrez.sm.GetCurrentlyDisplayedScreenID();
                 const hash = window.location.hash;
 
-                if (hash.includes('incident:')) {
+                if (hash && hash.includes('incident:')) {
                     return { id: screenId, type: 'incident' };
-                } else if (hash.includes('program:') && hash.includes(':attendees')) {
+                } else if (hash && hash.includes('program:') && hash.includes(':attendees')) {
                     return { id: screenId, type: 'program' };
                 }
             }
