@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.4.0
+// @version      1.4.6
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.4.0';
+    const SUITE_VERSION = '1.4.6';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -274,15 +274,15 @@
                 newButton.setAttribute('aria-label', 'StarWrench');
                 newButton.setAttribute('tooltip', 'StarWrench');
                 newButton.setAttribute('id', 'plugin-manager-button');
-                newButton.setAttribute('icon', 'fa-cogs');
+                newButton.setAttribute('icon', 'fa-wrench');
                 newButton.setAttribute('dropdown-heading', 'StarWrench');
 
                 newButton.addEventListener('click', () => {
                     createPluginManagerDropdown(container);
                 });
 
-                const secondButton = container.children[1];
-                container.insertBefore(newButton, secondButton);
+                const userMenuButton = container.querySelector('#header-user-button');
+                container.insertBefore(newButton, userMenuButton);
             }
         }, 1000);
     }
@@ -1537,6 +1537,15 @@
 
         // Handle keyboard navigation
         function handleKeyDown(e) {
+            // Always handle Escape, even when results aren't showing
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeResults();
+                if (searchInput) searchInput.blur();
+                return;
+            }
+
+            // Other keys only work when results are showing
             if (!resultsContainer || resultsContainer.style.display === 'none') {
                 return;
             }
@@ -1566,12 +1575,6 @@
                         if (searchInput) searchInput.value = '';
                     }
                     break;
-
-                case 'Escape':
-                    e.preventDefault();
-                    closeResults();
-                    if (searchInput) searchInput.blur();
-                    break;
             }
         }
 
@@ -1597,27 +1600,50 @@
             newSearch.type = 'text';
             newSearch.placeholder = 'Search residents...';
             newSearch.setAttribute('aria-label', 'Search residents');
+            newSearch.setAttribute('autocomplete', 'off');
             newSearch.style.cssText = `
                 border: 1px solid var(--color-grey-g30, #ccc);
                 height: var(--control-compact-size, 32px);
                 background: white;
                 border-radius: var(--control-border-radius, 4px);
-                padding: 0 8px;
+                padding: 0 32px 0 8px;
                 width: 100%;
                 font-size: 14px;
                 outline: none;
                 box-sizing: border-box;
             `;
 
+            // Create keyboard shortcut badge
+            const kbdBadge = document.createElement('kbd');
+            kbdBadge.textContent = '/';
+            kbdBadge.style.cssText = `
+                position: absolute;
+                right: 8px;
+                top: 50%;
+                transform: translateY(-50%);
+                background: var(--color-grey-g20, #f0f0f0);
+                border: 1px solid var(--color-grey-g30, #ccc);
+                border-radius: 3px;
+                padding: 2px 6px;
+                font-size: 11px;
+                font-family: monospace;
+                color: var(--color-grey-g60, #666);
+                pointer-events: none;
+                line-height: 1;
+                box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+            `;
+
             // Focus styling
             newSearch.addEventListener('focus', () => {
                 newSearch.style.outline = '2px solid var(--color-blue-b60, #0066cc)';
                 newSearch.style.borderColor = 'var(--color-blue-b60, #0066cc)';
+                kbdBadge.style.display = 'none';
             });
 
             newSearch.addEventListener('blur', () => {
                 newSearch.style.outline = 'none';
                 newSearch.style.borderColor = 'var(--color-grey-g30, #ccc)';
+                kbdBadge.style.display = 'block';
                 // Delay closing to allow clicks on results
                 setTimeout(closeResults, 200);
             });
@@ -1627,6 +1653,7 @@
 
             // Assemble
             wrapper.appendChild(newSearch);
+            wrapper.appendChild(kbdBadge);
             wrapper.appendChild(resultsContainer);
 
             // Replace original
@@ -1641,6 +1668,25 @@
             document.addEventListener('click', (e) => {
                 if (!wrapper.contains(e.target)) {
                     closeResults();
+                }
+            });
+
+            // Global keyboard shortcuts for focusing search
+            document.addEventListener('keydown', (e) => {
+                // Handle "/" key - focus search unless already in an input/textarea
+                if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {
+                    e.preventDefault();
+                    searchInput.focus();
+                    return;
+                }
+
+                // Handle Ctrl+K - focus search, or allow browser default if already focused
+                if (e.ctrlKey && e.key === 'k') {
+                    if (document.activeElement !== searchInput) {
+                        e.preventDefault();
+                        searchInput.focus();
+                    }
+                    // If searchInput already has focus, don't preventDefault to allow browser default
                 }
             });
 
