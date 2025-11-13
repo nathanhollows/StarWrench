@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.4.6
+// @version      1.6.1
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.4.6';
+    const SUITE_VERSION = '1.6.1';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1690,7 +1690,6 @@
                 }
             });
 
-            console.log('[ResidentSearch] Search input replaced successfully');
             return true;
         }
 
@@ -2539,7 +2538,6 @@
                 const stored = localStorage.getItem(RESIDENT_DB_KEY);
                 if (stored) {
                     residentDB = JSON.parse(stored);
-                    console.log(`[ResidentDB] Loaded ${Object.keys(residentDB).length} residents from database`);
                 } else {
                     residentDB = {};
                 }
@@ -2599,14 +2597,12 @@
             try {
                 const table = document.querySelector('table.directory-grid tbody');
                 if (!table) {
-                    console.log('[ResidentDB] Directory table not found');
                     isProcessing = false;
                     return;
                 }
 
                 const rows = table.querySelectorAll('tr[data-id]');
                 if (rows.length === 0) {
-                    console.log('[ResidentDB] No data rows found');
                     isProcessing = false;
                     return;
                 }
@@ -2662,7 +2658,6 @@
 
                 if (addedCount > 0 || updatedCount > 0 || removedCount > 0) {
                     saveDatabase();
-                    console.log(`[ResidentDB] Updated: +${addedCount} new, ~${updatedCount} modified, -${removedCount} removed. Total: ${Object.keys(residentDB).length}`);
                 }
 
             } catch (error) {
@@ -2691,11 +2686,8 @@
             loadDatabase();
 
             if (!isOnDirectoryPage()) {
-                console.log('[ResidentDB] Not on directory page, database loaded from cache');
                 return;
             }
-
-            console.log('[ResidentDB] Initializing on directory page');
 
             // Initial scan after page loads
             setTimeout(() => {
@@ -2750,11 +2742,46 @@
                         childList: true,
                         subtree: true
                     });
-                    console.log('[ResidentDB] Observing directory table for changes');
                 }
             }, 1500);
+        }
 
-            console.log('[ResidentDB] Plugin initialized successfully');
+        // Update a single entry in the database
+        function updateEntry(entryId, data) {
+            if (!entryId || !data) return false;
+
+            // Don't store excluded statuses
+            if (EXCLUDED_STATUSES.includes(data.status)) {
+                if (residentDB[entryId]) {
+                    delete residentDB[entryId];
+                    saveDatabase();
+                }
+                return false;
+            }
+
+            const existing = residentDB[entryId];
+            const changed = !existing ||
+                existing.nameFirst !== data.nameFirst ||
+                existing.namePreferred !== data.namePreferred ||
+                existing.nameLast !== data.nameLast ||
+                existing.roomSpace !== data.roomSpace ||
+                existing.status !== data.status;
+
+            if (changed) {
+                residentDB[entryId] = {
+                    entryId,
+                    nameFirst: data.nameFirst || '',
+                    namePreferred: data.namePreferred || '',
+                    nameLast: data.nameLast || '',
+                    roomSpace: data.roomSpace || '',
+                    status: data.status || '',
+                    lastUpdated: new Date().toISOString()
+                };
+                saveDatabase();
+                return true;
+            }
+
+            return false;
         }
 
         // Expose search function for other plugins to use
@@ -2808,8 +2835,215 @@
             },
             refresh: function() {
                 updateDatabase();
+            },
+            updateEntry: function(entryId, data) {
+                return updateEntry(entryId, data);
             }
         };
+
+        initialize();
+    }
+
+    // ENTRY WATCHER PLUGIN (Background Service)
+    // Watches for entry detail screens and updates the resident database
+    function initEntryWatcherPlugin() {
+        let lastProcessedHash = '';
+        let processingTimeout = null;
+
+        // Parse entry ID from URL hash
+        function getEntryIdFromHash() {
+            const hash = window.location.hash;
+            // Match pattern like #!entry:39073:rez%20360 or #!entry:39073
+            const match = hash.match(/#!entry:(\d+)/i);
+            return match ? match[1] : null;
+        }
+
+        // Wait for detail screen to appear and scrape data
+        function scrapeEntryData(entryId, attempts = 0) {
+            if (attempts > 50) {
+                return;
+            }
+
+            const detailScreen = document.querySelector(`#entry${entryId}-detail-screen`);
+            if (!detailScreen) {
+                // Wait and retry
+                setTimeout(() => scrapeEntryData(entryId, attempts + 1), 500);
+                return;
+            }
+
+            try {
+                // Find Entry Status field by looking within each li element
+                let status = '';
+                const listItems = detailScreen.querySelectorAll('li');
+
+                for (const li of listItems) {
+                    const pElements = li.querySelectorAll('p');
+                    if (pElements.length >= 2 && pElements[0].textContent.trim() === 'Entry Status') {
+                        status = pElements[1].textContent.trim();
+                        break;
+                    }
+                }
+
+                // Parse name from header: "Hollows, Nathan (Nathan) - [InRoom]"
+                const headerElement = detailScreen.querySelector('.ui-header_caption.header_caption .ui-detail-header.detail-header-heading');
+                if (!headerElement) {
+                    setTimeout(() => scrapeEntryData(entryId, attempts + 1), 500);
+                    return;
+                }
+
+                const headerText = headerElement.textContent.trim();
+                // Remove status suffix like " - [InRoom]"
+                const nameText = headerText.replace(/\s*-\s*\[.*?\]\s*$/, '');
+
+                // Parse "Hollows, Nathan (Nathan)" format
+                // Format: LastName, FirstName (PreferredName)
+                const nameMatch = nameText.match(/^([^,]+),\s*([^(]+)(?:\(([^)]+)\))?/);
+                if (!nameMatch) {
+                    return;
+                }
+
+                const nameLast = nameMatch[1].trim();
+                const nameFirst = nameMatch[2].trim();
+                const namePreferred = nameMatch[3] ? nameMatch[3].trim() : '';
+
+                // Find Room field - use null to indicate "not found"
+                // Search more broadly since Room might be in a different container
+                let roomSpace = null;
+                let roomFieldFound = false;
+
+                // First try within detailScreen
+                for (const li of listItems) {
+                    const pElements = li.querySelectorAll('p');
+                    if (pElements.length >= 1) {
+                        const labelText = pElements[0].textContent.trim();
+                        if (labelText === 'Room' || labelText === 'Room:') {
+                            roomFieldFound = true;
+                            // Find the span within this li
+                            const spanElement = li.querySelector('span');
+                            if (spanElement) {
+                                const roomText = spanElement.textContent.trim();
+                                // Parse format: "KF-LC03b-02/KF-LC03b-02" or "/"
+                                if (roomText === '/') {
+                                    roomSpace = ''; // Explicitly no room assigned
+                                } else if (roomText.includes('/')) {
+                                    // Take the first part before the slash
+                                    roomSpace = roomText.split('/')[0].trim();
+                                } else {
+                                    roomSpace = roomText;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // If not found in detailScreen, search the entire document
+                if (!roomFieldFound) {
+                    const allListItems = document.querySelectorAll('li');
+
+                    for (const li of allListItems) {
+                        const pElements = li.querySelectorAll('p');
+                        if (pElements.length >= 1) {
+                            const labelText = pElements[0].textContent.trim();
+                            if (labelText === 'Room' || labelText === 'Room:') {
+                                roomFieldFound = true;
+                                const spanElement = li.querySelector('span');
+                                if (spanElement) {
+                                    const roomText = spanElement.textContent.trim();
+                                    if (roomText === '/') {
+                                        roomSpace = '';
+                                    } else if (roomText.includes('/')) {
+                                        roomSpace = roomText.split('/')[0].trim();
+                                    } else {
+                                        roomSpace = roomText;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Get existing record to preserve roomSpace if we didn't find it
+                const existing = window.starWrenchResidentDB ? window.starWrenchResidentDB.getById(entryId) : null;
+
+                // Validate we have minimum required data
+                if (!status || !nameLast || !nameFirst) {
+                    setTimeout(() => scrapeEntryData(entryId, attempts + 1), 500);
+                    return;
+                }
+
+                // If status is "In Room", "Reserved", or "Tentative", we MUST wait for Room field to appear
+                const statusesNeedingRoom = ['In Room', 'Reserved', 'Tentative'];
+                if (statusesNeedingRoom.includes(status) && !roomFieldFound) {
+                    setTimeout(() => scrapeEntryData(entryId, attempts + 1), 500);
+                    return;
+                }
+
+                // Validate room data consistency
+                // If status is "In Room" but room shows "/", the room data hasn't loaded yet - retry
+                if (status === 'In Room' && roomSpace === '') {
+                    setTimeout(() => scrapeEntryData(entryId, attempts + 1), 500);
+                    return;
+                }
+
+                // Determine final room space value
+                const finalRoomSpace = roomSpace !== null ? roomSpace : (existing ? existing.roomSpace : '');
+
+                // Update the database
+                if (window.starWrenchResidentDB && window.starWrenchResidentDB.updateEntry) {
+                    const data = {
+                        nameFirst,
+                        namePreferred,
+                        nameLast,
+                        roomSpace: finalRoomSpace,
+                        status
+                    };
+
+                    window.starWrenchResidentDB.updateEntry(entryId, data);
+                }
+
+            } catch (error) {
+                console.error(`[EntryWatcher] Error scraping entry ${entryId}:`, error);
+            }
+        }
+
+        // Process hash change
+        function processHashChange() {
+            const currentHash = window.location.hash;
+
+            // Avoid processing the same hash multiple times
+            if (currentHash === lastProcessedHash) {
+                return;
+            }
+
+            lastProcessedHash = currentHash;
+
+            // Clear any pending processing
+            clearTimeout(processingTimeout);
+
+            const entryId = getEntryIdFromHash();
+            if (entryId) {
+                // Wait a bit for the page to start loading, then scrape
+                processingTimeout = setTimeout(() => {
+                    scrapeEntryData(entryId);
+                }, 500);
+            }
+        }
+
+        // Initialize
+        function initialize() {
+            // Watch for hash changes (when browser triggers it)
+            window.addEventListener('hashchange', processHashChange);
+
+            // Poll for hash changes (StarRez doesn't always trigger hashchange)
+            setInterval(() => {
+                processHashChange();
+            }, 1000);
+
+            // Process current hash on load
+            processHashChange();
+        }
 
         initialize();
     }
@@ -2878,6 +3112,7 @@
         // Initialize background services (always on, not user-configurable)
         setTimeout(() => {
             initResidentDatabasePlugin();
+            initEntryWatcherPlugin();
         }, 500);
 
         // Initialize enabled plugins
