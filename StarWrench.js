@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.6.1
+// @version      1.6.2
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.6.1';
+    const SUITE_VERSION = '1.6.2';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1325,7 +1325,6 @@
     function initResidentSearchPlugin() {
         let searchInput = null;
         let resultsContainer = null;
-        let filterCheckbox = null;
         let currentResults = [];
         let selectedIndex = -1;
         let searchTimeout = null;
@@ -1445,35 +1444,82 @@
             selectedIndex = -1;
             resultsContainer.innerHTML = '';
 
-            // Add filter checkbox at the top
+            // Add filter radio buttons at the top
             const filterContainer = document.createElement('div');
             filterContainer.style.cssText = `
-                padding: 8px 10px;
+                padding: 4px 10px;
                 border-bottom: 1px solid var(--color-grey-g30, #ddd);
                 background: var(--color-grey-g10, #f8f8f8);
                 display: flex;
                 align-items: center;
-                gap: 6px;
+                gap: 4px;
                 font-size: 12px;
             `;
 
-            filterCheckbox = document.createElement('input');
-            filterCheckbox.type = 'checkbox';
-            filterCheckbox.id = 'starwrench-current-only-filter';
-            filterCheckbox.checked = showCurrentOnly;
-            filterCheckbox.style.cssText = 'cursor: pointer;';
+            // Current residents radio
+            const currentRadio = document.createElement('input');
+            currentRadio.type = 'radio';
+            currentRadio.name = 'starwrench-resident-filter';
+            currentRadio.id = 'starwrench-filter-current';
+            currentRadio.checked = showCurrentOnly;
+            currentRadio.style.cssText = 'cursor: pointer; margin: 0;';
 
-            const filterLabel = document.createElement('label');
-            filterLabel.setAttribute('for', 'starwrench-current-only-filter');
-            filterLabel.textContent = 'Current residents only (uncheck for historical)';
-            filterLabel.style.cssText = 'cursor: pointer; user-select: none; color: var(--color-grey-g70, #555);';
+            const currentLabel = document.createElement('label');
+            currentLabel.setAttribute('for', 'starwrench-filter-current');
+            currentLabel.textContent = 'Current';
+            currentLabel.style.cssText = 'cursor: pointer; user-select: none; color: var(--color-grey-g70, #555); margin-right: 1em;';
 
-            filterCheckbox.addEventListener('change', () => {
-                toggleFilter();
+            // Historic residents radio
+            const historicRadio = document.createElement('input');
+            historicRadio.type = 'radio';
+            historicRadio.name = 'starwrench-resident-filter';
+            historicRadio.id = 'starwrench-filter-historic';
+            historicRadio.checked = !showCurrentOnly;
+            historicRadio.style.cssText = 'cursor: pointer; margin: 0;';
+
+            const historicLabel = document.createElement('label');
+            historicLabel.setAttribute('for', 'starwrench-filter-historic');
+            historicLabel.textContent = 'Historic';
+            historicLabel.style.cssText = 'cursor: pointer; user-select: none; color: var(--color-grey-g70, #555);';
+
+            // Tab hint
+            const tabHint = document.createElement('kbd');
+            tabHint.textContent = 'Tab';
+            tabHint.style.cssText = `
+                margin-left: auto;
+                background: var(--color-grey-g20, #e0e0e0);
+                border: 1px solid var(--color-grey-g30, #ccc);
+                border-radius: 3px;
+                padding: 1px 4px;
+                font-size: 10px;
+                font-family: monospace;
+                color: var(--color-grey-g60, #666);
+                line-height: 1;
+            `;
+
+            currentRadio.addEventListener('change', () => {
+                if (currentRadio.checked) {
+                    showCurrentOnly = true;
+                    toggleFilter();
+                }
             });
 
-            filterContainer.appendChild(filterCheckbox);
-            filterContainer.appendChild(filterLabel);
+            historicRadio.addEventListener('change', () => {
+                if (historicRadio.checked) {
+                    showCurrentOnly = false;
+                    toggleFilter();
+                }
+            });
+
+            // Store references for Tab toggle
+            filterContainer.dataset.currentRadio = 'starwrench-filter-current';
+            filterContainer.dataset.historicRadio = 'starwrench-filter-historic';
+
+            filterContainer.appendChild(currentRadio);
+            filterContainer.appendChild(currentLabel);
+            filterContainer.appendChild(historicRadio);
+            filterContainer.appendChild(historicLabel);
+            filterContainer.appendChild(tabHint);
             resultsContainer.appendChild(filterContainer);
 
             if (results.length === 0) {
@@ -1527,8 +1573,6 @@
 
         // Toggle between current and historical residents
         function toggleFilter() {
-            showCurrentOnly = filterCheckbox ? filterCheckbox.checked : true;
-
             // Re-run search if there's text
             if (searchInput && searchInput.value.trim().length >= 2) {
                 handleSearch(searchInput.value);
@@ -1553,6 +1597,20 @@
             const itemCount = currentResults.length > 20 ? 20 : currentResults.length;
 
             switch (e.key) {
+                case 'Tab':
+                    e.preventDefault();
+                    // Toggle between current and historic
+                    showCurrentOnly = !showCurrentOnly;
+                    // Update radio buttons
+                    const currentRadio = document.getElementById('starwrench-filter-current');
+                    const historicRadio = document.getElementById('starwrench-filter-historic');
+                    if (currentRadio && historicRadio) {
+                        currentRadio.checked = showCurrentOnly;
+                        historicRadio.checked = !showCurrentOnly;
+                    }
+                    toggleFilter();
+                    break;
+
                 case 'ArrowDown':
                     e.preventDefault();
                     if (selectedIndex < itemCount - 1) {
