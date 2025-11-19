@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.7.2
+// @version      1.7.3
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.7.2';
+    const SUITE_VERSION = '1.7.3';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2757,7 +2757,7 @@
 
     // SHAREPOINT LINKS PLUGIN
     function initSharePointLinksPlugin() {
-        const VALID_HALL_CODES = ['222', 'EH', 'ED', 'WTA', 'KF', 'WH'];
+        const VALID_HALL_CODES = ['222', 'EH', 'ED', 'WTA', 'KF', 'WH', 'WM'];
         const SHAREPOINT_BASE = 'https://vuw.sharepoint.com/sites/ACCO_COL_IndependentLiving/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FACCO%5FCOL%5FIndependentLiving%2FShared%20Documents%2FOperations%2FRoom%20photos%2F';
 
         let lastProcessedHash = '';
