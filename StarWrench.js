@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.7.3
+// @version      1.7.12
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.7.3';
+    const SUITE_VERSION = '1.7.12';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2760,34 +2760,34 @@
         const VALID_HALL_CODES = ['222', 'EH', 'ED', 'WTA', 'KF', 'WH', 'WM'];
         const SHAREPOINT_BASE = 'https://vuw.sharepoint.com/sites/ACCO_COL_IndependentLiving/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FACCO%5FCOL%5FIndependentLiving%2FShared%20Documents%2FOperations%2FRoom%20photos%2F';
 
-        let lastProcessedHash = '';
-        let processingTimeout = null;
-
-        // Get roomspace ID from hash
-        function getRoomSpaceIdFromHash() {
-            const hash = window.location.hash;
-            // Match pattern like #!roomspace:9182:details or #!roomspace:9182
-            const match = hash.match(/#!roomspace:(\d+)/i);
-            return match ? match[1] : null;
-        }
-
-        // Check if we're on a roomspace detail page
+        // Check if we're on a roomspace page
         function isRoomSpacePage() {
-            return getRoomSpaceIdFromHash() !== null;
+            const hash = window.location.hash;
+            return hash.includes('#!roomspace:');
         }
 
-        // Get room name from page
+        // Get room name from the specific roomspace detail screen
         function getRoomName() {
-            const heading = document.querySelector('.header_caption.ui-header_caption h2.detail-header-heading.ui-detail-header');
+            const match = window.location.hash.match(/#!roomspace:(\d+)/);
+            if (!match) return null;
+
+            const roomspaceScreen = document.querySelector(`#roomspace${match[1]}-detail-screen`);
+            if (!roomspaceScreen) return null;
+
+            const heading = roomspaceScreen.querySelector('.header_caption.ui-header_caption h2.detail-header-heading.ui-detail-header');
             return heading ? heading.textContent.trim() : null;
         }
 
-        // Get room type
+        // Get room type from the specific roomspace detail screen
         function getRoomType() {
-            const subheader = document.querySelector('.ui-detail-subheader.subheader.subheader-text');
-            if (!subheader) return null;
-            const strong = subheader.querySelector('strong');
-            return strong ? strong.textContent.trim() : null;
+            const match = window.location.hash.match(/#!roomspace:(\d+)/);
+            if (!match) return null;
+
+            const roomspaceScreen = document.querySelector(`#roomspace${match[1]}-detail-screen`);
+            if (!roomspaceScreen) return null;
+
+            const subheader = roomspaceScreen.querySelector('.ui-detail-subheader.subheader.subheader-text strong');
+            return subheader ? subheader.textContent.trim() : null;
         }
 
         // Check if room code is valid
@@ -2869,87 +2869,30 @@
             return container;
         }
 
-        // Insert SharePoint links
-        function insertSharePointLinks(attempts = 0) {
-            if (attempts > 20) return false;
+        // Try to insert SharePoint links if needed
+        function tryInsertLinks() {
+            if (!isRoomSpacePage()) return;
 
             const roomName = getRoomName();
-            if (!roomName) {
-                // Wait and retry
-                setTimeout(() => insertSharePointLinks(attempts + 1), 300);
-                return false;
-            }
-
-            if (!isValidRoomCode(roomName)) return false;
+            if (!roomName || !isValidRoomCode(roomName)) return;
 
             const roomType = getRoomType();
-            if (!roomType) {
-                // Wait and retry
-                setTimeout(() => insertSharePointLinks(attempts + 1), 300);
-                return false;
-            }
+            if (!roomType) return;
 
-            // Find the subheader element
-            const subheader = document.querySelector('.ui-detail-subheader.subheader.subheader-text');
-            if (!subheader) {
-                // Wait and retry
-                setTimeout(() => insertSharePointLinks(attempts + 1), 300);
-                return false;
-            }
+            const match = window.location.hash.match(/#!roomspace:(\d+)/);
+            const roomspaceScreen = match ? document.querySelector(`#roomspace${match[1]}-detail-screen`) : null;
+            if (!roomspaceScreen) return;
 
-            // Remove existing links first
-            const existing = subheader.querySelector('.starwrench-sharepoint-links');
-            if (existing) {
-                existing.remove();
-            }
+            const subheader = roomspaceScreen.querySelector('.ui-detail-subheader.subheader.subheader-text');
+            if (!subheader || subheader.querySelector('.starwrench-sharepoint-links')) return;
 
-            // Create and insert links inline
             const links = createSharePointLinks(roomName, roomType);
             subheader.appendChild(links);
-
-            return true;
         }
 
-        // Process hash change
-        function processHashChange() {
-            const currentHash = window.location.hash;
-
-            // Avoid processing the same hash multiple times
-            if (currentHash === lastProcessedHash) {
-                return;
-            }
-
-            lastProcessedHash = currentHash;
-
-            // Clear any pending processing
-            clearTimeout(processingTimeout);
-
-            const roomSpaceId = getRoomSpaceIdFromHash();
-            if (roomSpaceId) {
-                // Wait a bit for the page to start loading, then insert links
-                processingTimeout = setTimeout(() => {
-                    insertSharePointLinks();
-                }, 500);
-            }
-        }
-
-        // Initialize
-        function initialize() {
-            // Watch for hash changes (when browser triggers it)
-            window.addEventListener('hashchange', processHashChange);
-
-            // Poll for hash changes (StarRez doesn't always trigger hashchange)
-            setInterval(() => {
-                processHashChange();
-            }, 1000);
-
-            // Process current hash on load
-            setTimeout(() => {
-                processHashChange();
-            }, 1000);
-        }
-
-        initialize();
+        // Poll every 2 seconds (less aggressive than before)
+        setInterval(tryInsertLinks, 2000);
+        setTimeout(tryInsertLinks, 500); // Try immediately on load
     }
 
     // RESIDENT DATABASE PLUGIN
