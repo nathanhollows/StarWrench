@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.6.2
+// @version      1.6.4
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.6.2';
+    const SUITE_VERSION = '1.6.4';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -565,18 +565,21 @@
 
     // CLIPBOARD PLUGIN
     function initClipboardPlugin() {
-        function getRecordCountFromFooter(dashboardItem) {
-            const footer = dashboardItem.querySelector('.dashboard-footer.ui-dashboard-footer');
-            if (!footer || window.getComputedStyle(footer).display === 'none') {
-                return 0;
-            }
-            const match = footer.textContent.match(/Records:\s*(\d+)/);
-            return match ? parseInt(match[1], 10) : null;
-        }
+        function getEntryIdsFromDashboard(dashboardItem) {
+            const links = dashboardItem.querySelectorAll('a[href*="#!Entry:"]');
+            const entryIds = [];
 
-        function getRecordIdsFromDashboard(dashboardItem) {
-            const rows = dashboardItem.querySelectorAll('tr[data-recordid]');
-            return Array.from(rows).map(row => row.getAttribute('data-recordid')).filter(id => id);
+            links.forEach(link => {
+                const href = link.getAttribute('href');
+                // Match #!Entry:XXXXX pattern, extracting just the number
+                const match = href.match(/#!Entry:(\d+)/);
+                if (match) {
+                    entryIds.push(match[1]);
+                }
+            });
+
+            // Remove duplicates while preserving order
+            return [...new Set(entryIds)];
         }
 
         async function copyToClipboard(text) {
@@ -599,42 +602,107 @@
             }
         }
 
+        async function loadAllRecords(dashboardItem) {
+            const container = dashboardItem.querySelector('.dashboard-item-container');
+            if (!container) return false;
+
+            // Get expected total record count
+            const moduleOptions = dashboardItem.querySelector('.sys-module-options');
+            const footer = dashboardItem.querySelector('.dashboard-footer');
+            let expectedCount = 0;
+
+            if (moduleOptions) {
+                const count = moduleOptions.getAttribute('data-recordcount');
+                expectedCount = count ? parseInt(count, 10) : 0;
+            }
+
+            if (!expectedCount && footer) {
+                const match = footer.textContent.match(/Records:\s*(\d+)/);
+                expectedCount = match ? parseInt(match[1], 10) : 0;
+            }
+
+            if (!expectedCount) return true; // No count found, assume all loaded
+
+            // Keep scrolling until all records are loaded
+            let previousCount = 0;
+            let attempts = 0;
+            const maxAttempts = 100; // Safety limit
+
+            while (attempts < maxAttempts) {
+                const currentRows = dashboardItem.querySelectorAll('tbody tr[data-recordid]');
+                const currentCount = currentRows.length;
+
+                // Check if we have all records
+                if (currentCount >= expectedCount) {
+                    return true;
+                }
+
+                // Check if no new records loaded (might be stuck)
+                if (currentCount === previousCount) {
+                    attempts++;
+                    if (attempts > 3) {
+                        // Tried 3 times with no new records, assume we have all we can get
+                        return true;
+                    }
+                } else {
+                    attempts = 0; // Reset attempts counter if we got new records
+                }
+
+                previousCount = currentCount;
+
+                // Scroll to bottom of container
+                container.scrollTop = container.scrollHeight;
+
+                // Wait for lazy load (2 seconds)
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+
+            return true;
+        }
+
         async function handleClipboardClick(dashboardItem) {
-            const footerCount = getRecordCountFromFooter(dashboardItem);
-            if (footerCount === 0) {
-                alert('No data available to copy.');
-                return;
-            }
-            if (footerCount === null) {
-                alert('Could not determine record count.');
+            // Show loading message
+            const loadingAlert = confirm('This will scroll the list to load all records. This may take a while. Continue?');
+            if (!loadingAlert) return;
+
+            // Load all records
+            await loadAllRecords(dashboardItem);
+
+            const entryIds = getEntryIdsFromDashboard(dashboardItem);
+            if (entryIds.length === 0) {
+                alert('No Entry IDs found.');
                 return;
             }
 
-            const recordIds = getRecordIdsFromDashboard(dashboardItem);
-            if (recordIds.length === 0) {
-                alert('No record IDs found.');
-                return;
-            }
-
-            const idsText = recordIds.join('\n');
+            const idsText = entryIds.join('\n');
             const success = await copyToClipboard(idsText);
 
             if (success) {
-                alert(`Successfully copied ${recordIds.length} record IDs to clipboard! (Expected: ${footerCount})`);
+                alert(`Successfully copied ${entryIds.length} Entry IDs to clipboard!`);
             } else {
-                alert(`Failed to copy. Found ${recordIds.length} IDs (Expected: ${footerCount}):\n\n${idsText}`);
+                alert(`Failed to copy. Found ${entryIds.length} IDs:\n\n${idsText}`);
             }
         }
 
         function addClipboardButton(dashboardItem) {
-            if (dashboardItem.querySelector('.clipboard-copy-btn')) return;
+            // Remove existing button if present
+            const existingButton = dashboardItem.querySelector('.clipboard-copy-btn');
+            if (existingButton) {
+                existingButton.remove();
+            }
+
+            // Check if this dashboard item has any Entry links
+            const entryIds = getEntryIdsFromDashboard(dashboardItem);
+            if (entryIds.length === 0) {
+                return; // Don't add button if no Entry links found
+            }
 
             const titleOptions = dashboardItem.querySelector('.dashboard-item-title-options');
             if (!titleOptions) return;
 
             const button = document.createElement('button');
             button.className = 'sr_button_icon sr_button clipboard-copy-btn';
-            button.title = 'Copy Record IDs to Clipboard';
+            button.title = 'Copy Entry IDs to Clipboard';
             button.innerHTML = '<i class="fa fa-clipboard"></i>';
             button.addEventListener('click', (e) => {
                 e.preventDefault();
