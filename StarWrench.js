@@ -661,12 +661,42 @@
         }
 
         async function handleClipboardClick(dashboardItem) {
-            // Show loading message
-            const loadingAlert = confirm('This will scroll the list to load all records. This may take a while. Continue?');
-            if (!loadingAlert) return;
+            // Get current and expected counts
+            const moduleOptions = dashboardItem.querySelector('.sys-module-options');
+            const footer = dashboardItem.querySelector('.dashboard-footer');
+            let expectedCount = 0;
 
-            // Load all records
-            await loadAllRecords(dashboardItem);
+            if (moduleOptions) {
+                const count = moduleOptions.getAttribute('data-recordcount');
+                expectedCount = count ? parseInt(count, 10) : 0;
+            }
+
+            if (!expectedCount && footer) {
+                const match = footer.textContent.match(/Records:\s*(\d+)/);
+                expectedCount = match ? parseInt(match[1], 10) : 0;
+            }
+
+            const currentRows = dashboardItem.querySelectorAll('tbody tr[data-recordid]');
+            const currentCount = currentRows.length;
+
+            // Only prompt if we need to load more records
+            if (expectedCount > 0 && currentCount < expectedCount) {
+                const needToLoad = expectedCount - currentCount;
+                const loadingAlert = confirm(`Currently showing ${currentCount} of ${expectedCount} records. This will scroll to load the remaining ${needToLoad} records. Continue?`);
+                if (!loadingAlert) return;
+
+                // Load all records
+                await loadAllRecords(dashboardItem);
+
+                // Verify all records were loaded
+                const loadedRows = dashboardItem.querySelectorAll('tbody tr[data-recordid]');
+                const loadedCount = loadedRows.length;
+
+                if (loadedCount < expectedCount) {
+                    const proceed = confirm(`Warning: Only loaded ${loadedCount} of ${expectedCount} expected records. Continue copying?`);
+                    if (!proceed) return;
+                }
+            }
 
             const entryIds = getEntryIdsFromDashboard(dashboardItem);
             if (entryIds.length === 0) {
@@ -678,7 +708,11 @@
             const success = await copyToClipboard(idsText);
 
             if (success) {
-                alert(`Successfully copied ${entryIds.length} Entry IDs to clipboard!`);
+                let message = `Successfully copied ${entryIds.length} Entry IDs to clipboard!`;
+                if (expectedCount > 0 && entryIds.length !== expectedCount) {
+                    message += `\n\nNote: Expected ${expectedCount} records but found ${entryIds.length} Entry IDs.`;
+                }
+                alert(message);
             } else {
                 alert(`Failed to copy. Found ${entryIds.length} IDs:\n\n${idsText}`);
             }
