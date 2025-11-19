@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.6.6
+// @version      1.6.7
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.6.6';
+    const SUITE_VERSION = '1.6.7';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -770,6 +770,8 @@
         function addSearchToDropdown(dropdown) {
             if (dropdown.hasAttribute(PROCESSED_ATTRIBUTE)) return;
 
+            let selectedIndex = -1;
+
             const searchInput = document.createElement('input');
             searchInput.className = 'input search-filter-input';
             searchInput.type = 'text';
@@ -781,11 +783,77 @@
             `;
             searchInput.onclick = (e) => e.stopPropagation();
 
+            function getVisibleItems() {
+                return Array.from(dropdown.querySelectorAll('ul li')).filter(item => {
+                    return item.style.display !== 'none';
+                });
+            }
+
+            function setSelectedIndex(index) {
+                selectedIndex = index;
+                const visibleItems = getVisibleItems();
+
+                visibleItems.forEach((item, i) => {
+                    if (i === index) {
+                        item.style.backgroundColor = 'var(--color-blue-b20, #e6f2ff)';
+                    } else {
+                        item.style.backgroundColor = '';
+                    }
+                });
+
+                if (visibleItems[index]) {
+                    visibleItems[index].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }
+            }
+
             searchInput.addEventListener('input', function() {
                 const filterText = this.value.toLowerCase();
                 dropdown.querySelectorAll('ul li').forEach(item => {
                     item.style.display = item.textContent.toLowerCase().includes(filterText) ? '' : 'none';
                 });
+                selectedIndex = -1;
+                setSelectedIndex(-1);
+            });
+
+            searchInput.addEventListener('keydown', (e) => {
+                const visibleItems = getVisibleItems();
+                const itemCount = visibleItems.length;
+
+                switch (e.key) {
+                    case 'ArrowDown':
+                        e.preventDefault();
+                        if (selectedIndex < itemCount - 1) {
+                            setSelectedIndex(selectedIndex + 1);
+                        }
+                        break;
+
+                    case 'ArrowUp':
+                        e.preventDefault();
+                        if (selectedIndex > 0) {
+                            setSelectedIndex(selectedIndex - 1);
+                        } else if (selectedIndex === 0) {
+                            setSelectedIndex(-1);
+                        }
+                        break;
+
+                    case 'Enter':
+                        e.preventDefault();
+                        if (selectedIndex >= 0 && visibleItems[selectedIndex]) {
+                            const link = visibleItems[selectedIndex].querySelector('a');
+                            if (link) {
+                                link.click();
+                            }
+                        }
+                        break;
+
+                    case 'Escape':
+                        e.preventDefault();
+                        dropdown.classList.add('hidden');
+                        searchInput.value = '';
+                        selectedIndex = -1;
+                        setSelectedIndex(-1);
+                        break;
+                }
             });
 
             dropdown.insertBefore(searchInput, dropdown.firstChild);
