@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.6.7
+// @version      1.7.2
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.6.7';
+    const SUITE_VERSION = '1.7.2';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -79,6 +79,11 @@
                 enabled: true,
                 name: '🚦 Quick Incident Status',
                 description: 'Add quick status change buttons (In Progress/Close) to incident details'
+            },
+            sharepointLinks: {
+                enabled: true,
+                name: '📂 SharePoint Links',
+                description: 'Add SharePoint directory links to room detail pages for configured halls'
             }
         }
     };
@@ -2750,6 +2755,203 @@
         initialize();
     }
 
+    // SHAREPOINT LINKS PLUGIN
+    function initSharePointLinksPlugin() {
+        const VALID_HALL_CODES = ['222', 'EH', 'ED', 'WTA', 'KF', 'WH'];
+        const SHAREPOINT_BASE = 'https://vuw.sharepoint.com/sites/ACCO_COL_IndependentLiving/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FACCO%5FCOL%5FIndependentLiving%2FShared%20Documents%2FOperations%2FRoom%20photos%2F';
+
+        let lastProcessedHash = '';
+        let processingTimeout = null;
+
+        // Get roomspace ID from hash
+        function getRoomSpaceIdFromHash() {
+            const hash = window.location.hash;
+            // Match pattern like #!roomspace:9182:details or #!roomspace:9182
+            const match = hash.match(/#!roomspace:(\d+)/i);
+            return match ? match[1] : null;
+        }
+
+        // Check if we're on a roomspace detail page
+        function isRoomSpacePage() {
+            return getRoomSpaceIdFromHash() !== null;
+        }
+
+        // Get room name from page
+        function getRoomName() {
+            const heading = document.querySelector('.header_caption.ui-header_caption h2.detail-header-heading.ui-detail-header');
+            return heading ? heading.textContent.trim() : null;
+        }
+
+        // Get room type
+        function getRoomType() {
+            const subheader = document.querySelector('.ui-detail-subheader.subheader.subheader-text');
+            if (!subheader) return null;
+            const strong = subheader.querySelector('strong');
+            return strong ? strong.textContent.trim() : null;
+        }
+
+        // Check if room code is valid
+        function isValidRoomCode(roomName) {
+            return VALID_HALL_CODES.some(code => roomName.startsWith(code + '-'));
+        }
+
+        // Parse room name into parts
+        function parseRoomName(roomName) {
+            return roomName.split('-');
+        }
+
+        // Generate SharePoint URL for a path
+        function generateSharePointUrl(parts) {
+            const path = parts.join('%2F');
+            return SHAREPOINT_BASE + path;
+        }
+
+        // Create SharePoint links breadcrumb
+        function createSharePointLinks(roomName, roomType) {
+            const parts = parseRoomName(roomName);
+
+            // Determine how many parts to link based on room type
+            const isBed = roomType === 'Bed';
+            const maxParts = isBed ? parts.length : Math.min(3, parts.length);
+
+            // Create container (inline span)
+            const container = document.createElement('span');
+            container.className = 'starwrench-sharepoint-links';
+            container.style.cssText = `
+                margin-left: 12px;
+                display: inline-flex;
+                align-items: center;
+                gap: 2px;
+                font-size: 13px;
+            `;
+
+            // Add label
+            const label = document.createElement('span');
+            label.textContent = 'SharePoint:';
+            label.style.cssText = 'color: var(--color-grey-g60, #666); margin-right: 4px;';
+            container.appendChild(label);
+
+            // Add breadcrumb links
+            for (let i = 0; i < maxParts; i++) {
+                const linkParts = parts.slice(0, i + 1);
+                const url = generateSharePointUrl(linkParts);
+
+                const link = document.createElement('a');
+                link.href = url;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.textContent = parts[i];
+                link.style.cssText = `
+                    color: var(--color-blue-b50, #0078d4);
+                    text-decoration: none;
+                    padding: 2px 4px;
+                    border-radius: 3px;
+                    transition: background-color 0.2s;
+                `;
+                link.addEventListener('mouseenter', () => {
+                    link.style.backgroundColor = 'var(--color-blue-b20, #e6f2ff)';
+                });
+                link.addEventListener('mouseleave', () => {
+                    link.style.backgroundColor = 'transparent';
+                });
+
+                container.appendChild(link);
+
+                // Add separator (except after last link)
+                if (i < maxParts - 1) {
+                    const separator = document.createElement('span');
+                    separator.textContent = '/';
+                    separator.style.cssText = 'color: var(--color-grey-g50, #999); padding: 0 1px;';
+                    container.appendChild(separator);
+                }
+            }
+
+            return container;
+        }
+
+        // Insert SharePoint links
+        function insertSharePointLinks(attempts = 0) {
+            if (attempts > 20) return false;
+
+            const roomName = getRoomName();
+            if (!roomName) {
+                // Wait and retry
+                setTimeout(() => insertSharePointLinks(attempts + 1), 300);
+                return false;
+            }
+
+            if (!isValidRoomCode(roomName)) return false;
+
+            const roomType = getRoomType();
+            if (!roomType) {
+                // Wait and retry
+                setTimeout(() => insertSharePointLinks(attempts + 1), 300);
+                return false;
+            }
+
+            // Find the subheader element
+            const subheader = document.querySelector('.ui-detail-subheader.subheader.subheader-text');
+            if (!subheader) {
+                // Wait and retry
+                setTimeout(() => insertSharePointLinks(attempts + 1), 300);
+                return false;
+            }
+
+            // Remove existing links first
+            const existing = subheader.querySelector('.starwrench-sharepoint-links');
+            if (existing) {
+                existing.remove();
+            }
+
+            // Create and insert links inline
+            const links = createSharePointLinks(roomName, roomType);
+            subheader.appendChild(links);
+
+            return true;
+        }
+
+        // Process hash change
+        function processHashChange() {
+            const currentHash = window.location.hash;
+
+            // Avoid processing the same hash multiple times
+            if (currentHash === lastProcessedHash) {
+                return;
+            }
+
+            lastProcessedHash = currentHash;
+
+            // Clear any pending processing
+            clearTimeout(processingTimeout);
+
+            const roomSpaceId = getRoomSpaceIdFromHash();
+            if (roomSpaceId) {
+                // Wait a bit for the page to start loading, then insert links
+                processingTimeout = setTimeout(() => {
+                    insertSharePointLinks();
+                }, 500);
+            }
+        }
+
+        // Initialize
+        function initialize() {
+            // Watch for hash changes (when browser triggers it)
+            window.addEventListener('hashchange', processHashChange);
+
+            // Poll for hash changes (StarRez doesn't always trigger hashchange)
+            setInterval(() => {
+                processHashChange();
+            }, 1000);
+
+            // Process current hash on load
+            setTimeout(() => {
+                processHashChange();
+            }, 1000);
+        }
+
+        initialize();
+    }
+
     // RESIDENT DATABASE PLUGIN
     function initResidentDatabasePlugin() {
         const RESIDENT_DB_KEY = 'starWrenchResidentDatabase';
@@ -3319,6 +3521,9 @@
                 break;
             case 'quickIncidentStatus':
                 initQuickIncidentStatusPlugin();
+                break;
+            case 'sharepointLinks':
+                initSharePointLinksPlugin();
                 break;
         }
     }
