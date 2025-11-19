@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.6.4
+// @version      1.6.6
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.6.4';
+    const SUITE_VERSION = '1.6.6';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -37,17 +37,17 @@
             },
             clipboard: {
                 enabled: true,
-                name: '📋 Clipboard Copy',
-                description: 'Copy record IDs from dashboard sections to clipboard for easy export'
+                name: '📋 Dashboard Quick Copy',
+                description: 'Copy Entry IDs from dashboard sections to clipboard for easy export'
             },
-            dropdown: {
+            dashboard: {
                 enabled: true,
-                name: '🔍 Dropdown Search',
+                name: '🔍 Dashboard Search',
                 description: 'Add search functionality to the Dashboard dropdown menu'
             },
             initials: {
                 enabled: true,
-                name: '👤 Initials Expander',
+                name: '👤 Expand Initials',
                 description: 'Expands initials in shift and incident reports for easy reading'
             },
             phone: {
@@ -67,7 +67,7 @@
             },
             residentSearch: {
                 enabled: true,
-                name: '🔎 Resident Search',
+                name: '🔎 Instant Search',
                 description: 'Replaces global search with a fast resident lookup powered by the local database'
             },
             quickAddParticipants: {
@@ -763,8 +763,8 @@
         }, 2000);
     }
 
-    // DROPDOWN SEARCH PLUGIN
-    function initDropdownPlugin() {
+    // DASHBOARD SEARCH PLUGIN
+    function initDashboardPlugin() {
         const PROCESSED_ATTRIBUTE = 'data-search-filter-added';
 
         function addSearchToDropdown(dropdown) {
@@ -793,13 +793,15 @@
             setTimeout(() => searchInput.focus(), 50);
         }
 
-        function scanForDropdowns() {
+        function scanForDropdowns(focusInput = false) {
             document.querySelectorAll('.ui-submodules-more-dropdown.srw_subModuleTabs_more_dropdown').forEach(dropdown => {
                 if (!dropdown.hasAttribute(PROCESSED_ATTRIBUTE)) {
                     addSearchToDropdown(dropdown);
-                } else if (!dropdown.classList.contains('hidden')) {
+                } else if (focusInput) {
                     const searchInput = dropdown.querySelector('.search-filter-input');
-                    if (searchInput) setTimeout(() => searchInput.focus(), 50);
+                    if (searchInput) {
+                        setTimeout(() => searchInput.focus(), 100);
+                    }
                 }
             });
         }
@@ -807,7 +809,7 @@
         function setupMoreButtonListeners() {
             document.querySelectorAll('.srw_subModuleTabs_more, .srw_subModuleTabs_more_button, .ui-sub-module-more-group-button').forEach(button => {
                 if (!button.hasAttribute('data-filter-listener')) {
-                    button.addEventListener('click', () => setTimeout(scanForDropdowns, 200));
+                    button.addEventListener('click', () => setTimeout(() => scanForDropdowns(true), 300));
                     button.setAttribute('data-filter-listener', 'true');
                 }
             });
@@ -3225,8 +3227,9 @@
             case 'clipboard':
                 initClipboardPlugin();
                 break;
-            case 'dropdown':
-                initDropdownPlugin();
+            case 'dashboard':
+            case 'dropdown': // Backwards compatibility
+                initDashboardPlugin();
                 break;
             case 'initials':
                 initInitialsPlugin();
