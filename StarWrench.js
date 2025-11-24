@@ -2435,12 +2435,31 @@
             // Create instant search modal
             const instantSearch = createInstantSearchModal();
 
-            // Global keyboard shortcut for "/" to open search
+            // Global keyboard shortcut for "/" to toggle search
             document.addEventListener('keydown', (e) => {
-                // Handle "/" key - open search unless already in an input/textarea
-                if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {
+                if (e.key === '/') {
+                    const quickAccessInput = document.getElementById('starwrench-instant-search-input');
+
+                    // If focused on a non-quick-access input/textarea, ignore
+                    if (['INPUT', 'TEXTAREA'].includes(e.target.tagName) && e.target !== quickAccessInput) {
+                        return; // Let the "/" be typed normally
+                    }
+
+                    // If focused on quick access input with text already, ignore
+                    if (e.target === quickAccessInput && e.target.value.length > 0) {
+                        return; // Let the "/" be typed normally
+                    }
+
+                    // Otherwise, toggle the modal
                     e.preventDefault();
-                    instantSearch.openModal();
+                    const modal = document.getElementById('starwrench-instant-search-modal');
+                    const isModalOpen = modal && modal.style.display === 'flex';
+
+                    if (isModalOpen) {
+                        instantSearch.closeModal();
+                    } else {
+                        instantSearch.openModal();
+                    }
                 }
             });
 
