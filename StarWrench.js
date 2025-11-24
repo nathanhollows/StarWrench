@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.7.12
+// @version      1.8.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.7.12';
+    const SUITE_VERSION = '1.8.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1498,364 +1498,913 @@
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
-    // RESIDENT SEARCH PLUGIN
-    function initResidentSearchPlugin() {
-        let searchInput = null;
-        let resultsContainer = null;
-        let currentResults = [];
-        let selectedIndex = -1;
-        let searchTimeout = null;
-        let showCurrentOnly = true; // Default to current residents only
+    // RESIDENT DATABASE FROM CSV (Background Service)
+    // Allows importing resident data via CSV drag-and-drop
+    function initResidentDatabaseFromCSV() {
+        const RESIDENT_DB_KEY = 'starWrenchResidentDatabase';
+        const RESIDENT_DB_META_KEY = 'starWrenchResidentDatabaseMeta';
+        const CURRENT_STATUSES = ['Reserved', 'Tentative', 'In Room'];
 
-        // Wait for the resident database to be available
-        function waitForDatabase(callback, attempts = 0) {
-            if (window.starWrenchResidentDB) {
-                callback();
-            } else if (attempts < 50) {
-                setTimeout(() => waitForDatabase(callback, attempts + 1), 100);
-            } else {
-                console.error('[ResidentSearch] Resident database not available');
-            }
-        }
+        let residentDB = {};
 
-        // Navigate to a resident's entry
-        function navigateToResident(entryId) {
-            if (!entryId) return;
-            const shortcode = `Entry:${entryId}`;
-            starrez.sm.NavigateTo(`#!${shortcode}`);
-        }
-
-        // Create the results dropdown
-        function createResultsContainer() {
-            const container = document.createElement('div');
-            container.id = 'starwrench-resident-search-results';
-            container.style.cssText = `
-                position: absolute;
-                top: 100%;
-                left: 0;
-                min-width: 100%;
-                width: max-content;
-                max-width: 400px;
-                background: white;
-                border: 1px solid var(--color-grey-g30, #ccc);
-                border-top: none;
-                border-radius: 0 0 4px 4px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                max-height: 400px;
-                overflow-y: auto;
-                z-index: 10000;
-                display: none;
-                margin-top: -1px;
-            `;
-            return container;
-        }
-
-        // Create a single result item
-        function createResultItem(resident, index) {
-            const item = document.createElement('div');
-            item.className = 'starwrench-search-result-item';
-            item.dataset.index = index;
-            item.dataset.entryId = resident.entryId;
-
-            const displayName = `${resident.namePreferred || resident.nameFirst} ${resident.nameLast}`;
-            const roomInfo = resident.roomSpace || 'No room';
-
-            item.style.cssText = `
-                padding: 6px 10px;
-                cursor: pointer;
-                border-bottom: 1px solid var(--color-grey-g20, #f0f0f0);
-                transition: background-color 0.1s;
-            `;
-
-            item.innerHTML = `
-                <div style="font-weight: 600; color: var(--color-grey-g90, #333); font-size: 14px; line-height: 1.3;">
-                    ${displayName}
-                </div>
-                <div style="font-size: 11px; color: var(--color-grey-g60, #666); line-height: 1.3;">
-                    ${roomInfo}
-                </div>
-                <div style="font-size: 11px; color: var(--color-grey-g50, #999); line-height: 1.3;">
-                    Entry ${resident.entryId}
-                </div>
-            `;
-
-            // Click handler (using mousedown to fire before blur event)
-            item.addEventListener('mousedown', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                navigateToResident(resident.entryId);
-                closeResults();
-                if (searchInput) searchInput.value = '';
-            });
-
-            // Hover handler
-            item.addEventListener('mouseenter', () => {
-                setSelectedIndex(index);
-            });
-
-            return item;
-        }
-
-        // Update the visual selection
-        function setSelectedIndex(index) {
-            selectedIndex = index;
-
-            const items = resultsContainer.querySelectorAll('.starwrench-search-result-item');
-            items.forEach((item, i) => {
-                if (i === index) {
-                    item.style.backgroundColor = 'var(--color-blue-b20, #e6f2ff)';
+        // Load database from localStorage
+        function loadDatabase() {
+            try {
+                const stored = localStorage.getItem(RESIDENT_DB_KEY);
+                if (stored) {
+                    residentDB = JSON.parse(stored);
                 } else {
-                    item.style.backgroundColor = 'white';
+                    residentDB = {};
                 }
-            });
-
-            // Scroll into view if needed
-            if (items[index]) {
-                items[index].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            } catch (error) {
+                console.error('[ResidentDB] Failed to load database:', error);
+                residentDB = {};
             }
         }
 
-        // Display search results
-        function showResults(results) {
-            currentResults = results;
-            selectedIndex = -1;
-            resultsContainer.innerHTML = '';
+        // Save database to localStorage
+        function saveDatabase() {
+            try {
+                localStorage.setItem(RESIDENT_DB_KEY, JSON.stringify(residentDB));
+                localStorage.setItem(RESIDENT_DB_META_KEY, JSON.stringify({
+                    lastUpdated: new Date().toISOString(),
+                    recordCount: Object.keys(residentDB).length
+                }));
+            } catch (error) {
+                console.error('[ResidentDB] Failed to save database:', error);
+            }
+        }
 
-            // Add filter radio buttons at the top
-            const filterContainer = document.createElement('div');
-            filterContainer.style.cssText = `
-                padding: 4px 10px;
-                border-bottom: 1px solid var(--color-grey-g30, #ddd);
-                background: var(--color-grey-g10, #f8f8f8);
-                display: flex;
-                align-items: center;
-                gap: 4px;
-                font-size: 12px;
-            `;
+        // Parse CSV text with flexible header detection
+        function parseCSV(csvText) {
+            const lines = csvText.split('\n').map(line => line.trim()).filter(line => line);
+            if (lines.length === 0) return [];
 
-            // Current residents radio
-            const currentRadio = document.createElement('input');
-            currentRadio.type = 'radio';
-            currentRadio.name = 'starwrench-resident-filter';
-            currentRadio.id = 'starwrench-filter-current';
-            currentRadio.checked = showCurrentOnly;
-            currentRadio.style.cssText = 'cursor: pointer; margin: 0;';
+            // Parse header row to find column indices
+            const headerLine = lines[0];
+            const headers = parseCSVLine(headerLine);
 
-            const currentLabel = document.createElement('label');
-            currentLabel.setAttribute('for', 'starwrench-filter-current');
-            currentLabel.textContent = 'Current';
-            currentLabel.style.cssText = 'cursor: pointer; user-select: none; color: var(--color-grey-g70, #555); margin-right: 1em;';
+            // Find required column indices (case-insensitive)
+            const columnMap = {};
+            const requiredColumns = ['Entry ID', 'First Name', 'Preferred Name', 'Last Name', 'Room', 'Entry Status'];
 
-            // Historic residents radio
-            const historicRadio = document.createElement('input');
-            historicRadio.type = 'radio';
-            historicRadio.name = 'starwrench-resident-filter';
-            historicRadio.id = 'starwrench-filter-historic';
-            historicRadio.checked = !showCurrentOnly;
-            historicRadio.style.cssText = 'cursor: pointer; margin: 0;';
-
-            const historicLabel = document.createElement('label');
-            historicLabel.setAttribute('for', 'starwrench-filter-historic');
-            historicLabel.textContent = 'Historic';
-            historicLabel.style.cssText = 'cursor: pointer; user-select: none; color: var(--color-grey-g70, #555);';
-
-            // Tab hint
-            const tabHint = document.createElement('kbd');
-            tabHint.textContent = 'Tab';
-            tabHint.style.cssText = `
-                margin-left: auto;
-                background: var(--color-grey-g20, #e0e0e0);
-                border: 1px solid var(--color-grey-g30, #ccc);
-                border-radius: 3px;
-                padding: 1px 4px;
-                font-size: 10px;
-                font-family: monospace;
-                color: var(--color-grey-g60, #666);
-                line-height: 1;
-            `;
-
-            currentRadio.addEventListener('change', () => {
-                if (currentRadio.checked) {
-                    showCurrentOnly = true;
-                    toggleFilter();
-                }
+            headers.forEach((header, index) => {
+                const normalizedHeader = header.trim();
+                requiredColumns.forEach(reqCol => {
+                    if (normalizedHeader.toLowerCase() === reqCol.toLowerCase()) {
+                        columnMap[reqCol] = index;
+                    }
+                });
             });
 
-            historicRadio.addEventListener('change', () => {
-                if (historicRadio.checked) {
-                    showCurrentOnly = false;
-                    toggleFilter();
+            // Check if we have Entry ID (required)
+            if (columnMap['Entry ID'] === undefined) {
+                throw new Error('CSV must contain "Entry ID" column');
+            }
+
+            // Parse data rows
+            const records = [];
+            for (let i = 1; i < lines.length; i++) {
+                const values = parseCSVLine(lines[i]);
+
+                const entryId = values[columnMap['Entry ID']]?.trim();
+                if (!entryId) continue; // Skip rows without entry ID
+
+                const record = {
+                    entryId: entryId,
+                    nameFirst: values[columnMap['First Name']]?.trim() || '',
+                    namePreferred: values[columnMap['Preferred Name']]?.trim() || '',
+                    nameLast: values[columnMap['Last Name']]?.trim() || '',
+                    roomSpace: values[columnMap['Room']]?.trim() || '',
+                    status: values[columnMap['Entry Status']]?.trim() || '',
+                    lastUpdated: new Date().toISOString()
+                };
+
+                records.push(record);
+            }
+
+            return records;
+        }
+
+        // Parse a single CSV line handling quoted fields
+        function parseCSVLine(line) {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
+
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+                const nextChar = line[i + 1];
+
+                if (char === '"') {
+                    if (inQuotes && nextChar === '"') {
+                        // Escaped quote
+                        current += '"';
+                        i++; // Skip next quote
+                    } else {
+                        // Toggle quote mode
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === ',' && !inQuotes) {
+                    // Field separator
+                    result.push(current);
+                    current = '';
+                } else {
+                    current += char;
                 }
-            });
+            }
 
-            // Store references for Tab toggle
-            filterContainer.dataset.currentRadio = 'starwrench-filter-current';
-            filterContainer.dataset.historicRadio = 'starwrench-filter-historic';
+            // Add last field
+            result.push(current);
 
-            filterContainer.appendChild(currentRadio);
-            filterContainer.appendChild(currentLabel);
-            filterContainer.appendChild(historicRadio);
-            filterContainer.appendChild(historicLabel);
-            filterContainer.appendChild(tabHint);
-            resultsContainer.appendChild(filterContainer);
+            return result;
+        }
 
-            if (results.length === 0) {
-                const noResults = document.createElement('div');
-                noResults.style.cssText = 'padding: 16px 12px; text-align: center; color: var(--color-grey-g60, #666);';
-                noResults.textContent = 'No residents found';
-                resultsContainer.appendChild(noResults);
-                resultsContainer.style.display = 'block';
+        // Import CSV data into database
+        function importCSV(csvText) {
+            try {
+                const records = parseCSV(csvText);
+
+                let addedCount = 0;
+                let updatedCount = 0;
+
+                records.forEach(record => {
+                    const existing = residentDB[record.entryId];
+
+                    if (!existing) {
+                        residentDB[record.entryId] = record;
+                        addedCount++;
+                    } else {
+                        // Check if anything changed
+                        const changed =
+                            existing.nameFirst !== record.nameFirst ||
+                            existing.namePreferred !== record.namePreferred ||
+                            existing.nameLast !== record.nameLast ||
+                            existing.roomSpace !== record.roomSpace ||
+                            existing.status !== record.status;
+
+                        if (changed) {
+                            residentDB[record.entryId] = record;
+                            updatedCount++;
+                        }
+                    }
+                });
+
+                saveDatabase();
+
+                return { addedCount, updatedCount, totalRecords: records.length };
+            } catch (error) {
+                console.error('[ResidentDB] Failed to import CSV:', error);
+                throw error;
+            }
+        }
+
+
+        // Expose API for search plugin
+        window.starWrenchResidentDB = {
+            search: function(query, currentOnly = true) {
+                if (!query || typeof query !== 'string') return [];
+
+                const lowerQuery = query.toLowerCase();
+                const results = [];
+
+                Object.values(residentDB).forEach(resident => {
+                    const isCurrent = CURRENT_STATUSES.includes(resident.status);
+
+                    if (currentOnly && !isCurrent) {
+                        return;
+                    }
+                    if (!currentOnly && isCurrent) {
+                        return;
+                    }
+
+                    const searchableText = [
+                        resident.nameFirst,
+                        resident.namePreferred,
+                        resident.nameLast,
+                        resident.entryId,
+                        resident.roomSpace
+                    ].join(' ').toLowerCase();
+
+                    if (searchableText.includes(lowerQuery)) {
+                        results.push(resident);
+                    }
+                });
+
+                return results;
+            },
+            getById: function(entryId) {
+                return residentDB[entryId] || null;
+            },
+            getAll: function(currentOnly = true) {
+                const all = Object.values(residentDB);
+                if (currentOnly) {
+                    return all.filter(r => CURRENT_STATUSES.includes(r.status));
+                }
+                return all;
+            },
+            getCount: function() {
+                return Object.keys(residentDB).length;
+            },
+            importCSV: function(csvText) {
+                return importCSV(csvText);
+            }
+        };
+
+        // Initialize
+        loadDatabase();
+
+        console.log(`[ResidentDB] Loaded ${Object.keys(residentDB).length} residents from storage`);
+    }
+
+    // QUICK ACCESS PLUGIN
+    function initQuickAccessPlugin() {
+        // Inject CSS for proper layout
+        function injectStyles() {
+            if (document.getElementById('starwrench-search-styles')) {
                 return;
             }
 
-            // Limit to top 20 results
-            const limitedResults = results.slice(0, 20);
-            limitedResults.forEach((resident, index) => {
-                const item = createResultItem(resident, index);
-                resultsContainer.appendChild(item);
-            });
+            const style = document.createElement('style');
+            style.id = 'starwrench-search-styles';
+            style.textContent = `
+                #habitat-site-header .habitat-siteheading-bar {
+                    display: flex !important;
+                    width: 100%;
+                    justify-content: space-between;
+                }
 
-            resultsContainer.style.display = 'block';
+                #habitat-site-header .habitat-siteheading-bar #starwrench-search-hint {
+                    margin-left: auto;
+                    margin-right: 0;
+                    font-size: 13px;
+                    color: var(--color-grey-g60, #666);
+                    white-space: nowrap;
+                    flex-shrink: 1;
+                }
+
+                #starwrench-instant-search-modal {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0, 0, 0, 0.5);
+                    z-index: 100000;
+                    display: flex;
+                    justify-content: center;
+                    padding-top: 15vh;
+                }
+
+                #starwrench-instant-search-container {
+                    background: white;
+                    border-radius: 8px;
+                    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+                    width: 90%;
+                    max-width: 600px;
+                    max-height: 70vh;
+                    display: flex;
+                    flex-direction: column;
+                    overflow: hidden;
+                }
+
+                #starwrench-instant-search-header {
+                    display: flex;
+                    align-items: center;
+                    border-bottom: 1px solid var(--color-grey-g30, #ccc);
+                }
+
+                #starwrench-instant-search-input {
+                    border: none;
+                    padding: 16px 20px;
+                    font-size: 18px;
+                    outline: none;
+                    flex: 1;
+                }
+
+                #starwrench-instant-search-tabs {
+                    display: flex;
+                    gap: 4px;
+                    padding: 8px 12px;
+                    border-left: 1px solid var(--color-grey-g30, #ccc);
+                }
+
+                .starwrench-search-tab {
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    color: var(--color-grey-g60, #666);
+                    transition: all 0.2s;
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+
+                .starwrench-search-tab:hover {
+                    background: var(--color-grey-g20, #f0f0f0);
+                }
+
+                .starwrench-search-tab.active {
+                    background: var(--color-blue-b60, #0066cc);
+                    color: white;
+                }
+
+                .starwrench-search-tab-icon {
+                    font-size: 12px;
+                }
+
+                #starwrench-instant-search-results {
+                    overflow-y: auto;
+                    display: none;
+                    flex-grow: 1;
+                }
+
+                #starwrench-instant-search-results.visible {
+                    display: block;
+                }
+
+                #starwrench-instant-search-footer {
+                    padding: 8px 20px;
+                    border-top: 1px solid var(--color-grey-g30, #ccc);
+                    font-size: 11px;
+                    color: var(--color-grey-g60, #666);
+                    background: var(--color-grey-g10, #f8f8f8);
+                    text-align: center;
+                }
+
+                #starwrench-instant-search-container.drag-over {
+                    border: 3px dashed var(--color-blue-b60, #0066cc);
+                    background: rgb(243, 249, 255);
+                }
+
+                #starwrench-instant-search-container.drag-over #starwrench-instant-search-results,
+                #starwrench-instant-search-container.drag-over #starwrench-instant-search-header,
+                #starwrench-instant-search-container.drag-over #starwrench-instant-search-footer {
+                    background: rgb(243, 249, 255);
+                }
+
+                .starwrench-instant-search-result {
+                    padding: 12px 20px;
+                    cursor: pointer;
+                    border-bottom: 1px solid var(--color-grey-g20, #f0f0f0);
+                    transition: background-color 0.1s;
+                }
+
+                .starwrench-instant-search-result:hover,
+                .starwrench-instant-search-result.selected {
+                    background: var(--color-blue-b20, #e6f2ff);
+                }
+
+                .starwrench-instant-search-empty {
+                    padding: 40px 20px;
+                    text-align: center;
+                    color: var(--color-grey-g60, #666);
+                }
+
+                .starwrench-instant-search-empty h3 {
+                    margin: 0 0 16px 0;
+                    color: var(--color-grey-g70, #555);
+                }
+
+                .starwrench-instant-search-empty ol {
+                    text-align: left;
+                    max-width: 400px;
+                    margin: 16px auto;
+                }
+            `;
+            document.head.appendChild(style);
         }
 
-        // Close the results dropdown
-        function closeResults() {
-            if (resultsContainer) {
-                resultsContainer.style.display = 'none';
+        // Create instant search modal
+        function createInstantSearchModal() {
+            const BOOKMARKS_KEY = 'starrezBookmarks';
+            const SEARCH_MODE_CURRENT = 'current';
+            const SEARCH_MODE_HISTORIC = 'historic';
+            const SEARCH_MODE_BOOKMARKS = 'bookmarks';
+
+            let searchInput = null;
+            let resultsContainer = null;
+            let currentResults = [];
+            let selectedIndex = -1;
+            let searchTimeout = null;
+            let currentMode = SEARCH_MODE_BOOKMARKS;
+
+            // Create modal structure
+            const modal = document.createElement('div');
+            modal.id = 'starwrench-instant-search-modal';
+            modal.style.display = 'none';
+
+            const container = document.createElement('div');
+            container.id = 'starwrench-instant-search-container';
+
+            // Header with input and tabs
+            const header = document.createElement('div');
+            header.id = 'starwrench-instant-search-header';
+
+            searchInput = document.createElement('input');
+            searchInput.id = 'starwrench-instant-search-input';
+            searchInput.type = 'text';
+            searchInput.placeholder = 'Search residents...';
+            searchInput.setAttribute('autocomplete', 'off');
+
+            // Tabs for mode switching
+            const tabs = document.createElement('div');
+            tabs.id = 'starwrench-instant-search-tabs';
+
+            const currentTab = document.createElement('div');
+            currentTab.className = 'starwrench-search-tab';
+            currentTab.dataset.mode = SEARCH_MODE_CURRENT;
+            currentTab.innerHTML = `<i class="fa fa-user starwrench-search-tab-icon"></i>`;
+            currentTab.title = 'Current Residents';
+
+            const historicTab = document.createElement('div');
+            historicTab.className = 'starwrench-search-tab';
+            historicTab.dataset.mode = SEARCH_MODE_HISTORIC;
+            historicTab.innerHTML = `<i class="fa fa-history starwrench-search-tab-icon"></i>`;
+            historicTab.title = 'Historic Residents';
+
+            const bookmarksTab = document.createElement('div');
+            bookmarksTab.className = 'starwrench-search-tab active';
+            bookmarksTab.dataset.mode = SEARCH_MODE_BOOKMARKS;
+            bookmarksTab.innerHTML = `<i class="fa fa-bookmark starwrench-search-tab-icon"></i>`;
+            bookmarksTab.title = 'Bookmarks';
+
+            tabs.appendChild(currentTab);
+            tabs.appendChild(historicTab);
+            tabs.appendChild(bookmarksTab);
+
+            header.appendChild(searchInput);
+            header.appendChild(tabs);
+
+            resultsContainer = document.createElement('div');
+            resultsContainer.id = 'starwrench-instant-search-results';
+
+            const footer = document.createElement('div');
+            footer.id = 'starwrench-instant-search-footer';
+            footer.innerHTML = 'To update index: <strong>Main</strong> → Filter residents → <strong>Print view as report</strong> → <strong>CSV</strong> → Drag and drop here';
+
+            container.appendChild(header);
+            container.appendChild(resultsContainer);
+            container.appendChild(footer);
+            modal.appendChild(container);
+            document.body.appendChild(modal);
+
+            // Load bookmarks from localStorage
+            function loadBookmarks() {
+                try {
+                    return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '[]');
+                } catch (error) {
+                    console.error('[QuickAccess] Failed to load bookmarks:', error);
+                    return [];
+                }
+            }
+
+            // Parse URL to determine navigation type (same as bookmarks plugin)
+            function parseUrl(url) {
+                const urlObj = new URL(url);
+                const hash = urlObj.hash;
+                const pathParts = urlObj.pathname.split('/').filter(p => p);
+
+                if (hash && hash.startsWith('#!')) {
+                    return { type: 'shortcode', shortcode: hash.substring(2) };
+                }
+
+                return {
+                    type: 'module',
+                    module: pathParts[1] || '',
+                    submodule: pathParts[2] || ''
+                };
+            }
+
+            // Navigate to URL (same as bookmarks plugin)
+            function navigateToUrl(url) {
+                closeModal();
+
+                const navInfo = parseUrl(url);
+
+                if (navInfo.type === 'shortcode') {
+                    if (typeof starrez !== 'undefined' && starrez.sm && starrez.sm.NavigateTo) {
+                        starrez.sm.NavigateTo(`#!${navInfo.shortcode}`);
+                    }
+                } else {
+                    if (typeof starrez !== 'undefined' && starrez.mm && starrez.mm.NavigateTo) {
+                        if (window.location.hash && window.location.hash.startsWith('#!')) {
+                            starrez.sm.CloseAllDetailScreens().done(() => {
+                                starrez.mm.NavigateTo(navInfo.module, navInfo.submodule);
+                            });
+                        } else {
+                            starrez.mm.NavigateTo(navInfo.module, navInfo.submodule);
+                        }
+                    }
+                }
+            }
+
+            // Navigate to resident
+            function navigateToResident(entryId) {
+                if (!entryId) return;
+                closeModal();
+                if (typeof starrez !== 'undefined' && starrez.sm && starrez.sm.NavigateTo) {
+                    starrez.sm.NavigateTo(`#!Entry:${entryId}`);
+                }
+            }
+
+            // Switch mode and update UI
+            function switchMode(newMode) {
+                currentMode = newMode;
+
+                // Update tab active state
+                document.querySelectorAll('.starwrench-search-tab').forEach(tab => {
+                    if (tab.dataset.mode === newMode) {
+                        tab.classList.add('active');
+                    } else {
+                        tab.classList.remove('active');
+                    }
+                });
+
+                // Update placeholder
+                if (newMode === SEARCH_MODE_BOOKMARKS) {
+                    searchInput.placeholder = 'Search residents...';
+                } else if (newMode === SEARCH_MODE_CURRENT) {
+                    searchInput.placeholder = 'Search current residents...';
+                } else {
+                    searchInput.placeholder = 'Search historic residents...';
+                }
+
+                // Refresh display
+                if (searchInput.value.trim()) {
+                    handleSearch(searchInput.value);
+                } else if (newMode === SEARCH_MODE_BOOKMARKS) {
+                    showBookmarks();
+                } else {
+                    resultsContainer.classList.remove('visible');
+                }
+            }
+
+            // Create bookmark item
+            function createBookmarkItem(bookmark, index) {
+                const item = document.createElement('div');
+                item.className = 'starwrench-instant-search-result';
+                item.dataset.index = index;
+                item.dataset.url = bookmark.url;
+
+                item.innerHTML = `
+                    <div style="font-weight: 600; color: var(--color-grey-g90, #333); font-size: 14px; line-height: 1.3;">
+                        ${bookmark.name}
+                    </div>
+                    <div style="font-size: 11px; color: var(--color-grey-g60, #666); line-height: 1.3;">
+                        ${bookmark.url}
+                    </div>
+                `;
+
+                item.addEventListener('click', () => {
+                    navigateToUrl(bookmark.url);
+                });
+
+                item.addEventListener('mouseenter', () => {
+                    setSelectedIndex(index);
+                });
+
+                return item;
+            }
+
+            // Create resident result item
+            function createResidentItem(resident, index) {
+                const item = document.createElement('div');
+                item.className = 'starwrench-instant-search-result';
+                item.dataset.index = index;
+                item.dataset.entryId = resident.entryId;
+
+                const displayName = `${resident.namePreferred || resident.nameFirst} ${resident.nameLast}`;
+                const roomInfo = resident.roomSpace || 'No room';
+
+                item.innerHTML = `
+                    <div style="font-weight: 600; color: var(--color-grey-g90, #333); font-size: 14px; line-height: 1.3;">
+                        ${displayName}
+                    </div>
+                    <div style="font-size: 12px; color: var(--color-grey-g60, #666); line-height: 1.3;">
+                        ${roomInfo} • Entry ${resident.entryId}
+                    </div>
+                `;
+
+                item.addEventListener('click', () => {
+                    navigateToResident(resident.entryId);
+                });
+
+                item.addEventListener('mouseenter', () => {
+                    setSelectedIndex(index);
+                });
+
+                return item;
+            }
+
+            // Update selected index
+            function setSelectedIndex(index) {
+                selectedIndex = index;
+                const items = resultsContainer.querySelectorAll('.starwrench-instant-search-result');
+                items.forEach((item, i) => {
+                    if (i === index) {
+                        item.classList.add('selected');
+                        item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                    } else {
+                        item.classList.remove('selected');
+                    }
+                });
+            }
+
+            // Show bookmarks
+            function showBookmarks() {
+                const bookmarks = loadBookmarks();
+                currentResults = bookmarks;
+                selectedIndex = -1;
                 resultsContainer.innerHTML = '';
-            }
-            currentResults = [];
-            selectedIndex = -1;
-        }
+                resultsContainer.classList.add('visible');
 
-        // Handle search input
-        function handleSearch(query) {
-            clearTimeout(searchTimeout);
-
-            if (!query || query.trim().length < 2) {
-                closeResults();
-                return;
-            }
-
-            searchTimeout = setTimeout(() => {
-                if (!window.starWrenchResidentDB) {
-                    console.error('[ResidentSearch] Database not available');
+                if (bookmarks.length === 0) {
+                    resultsContainer.innerHTML = `
+                        <div class="starwrench-instant-search-empty">
+                            <h3>No bookmarks</h3>
+                            <p>Create bookmarks by clicking the bookmark icon in the header</p>
+                        </div>
+                    `;
                     return;
                 }
 
-                const results = window.starWrenchResidentDB.search(query.trim(), showCurrentOnly);
-                showResults(results);
-            }, 150); // Debounce 150ms
-        }
-
-        // Toggle between current and historical residents
-        function toggleFilter() {
-            // Re-run search if there's text
-            if (searchInput && searchInput.value.trim().length >= 2) {
-                handleSearch(searchInput.value);
-            }
-        }
-
-        // Handle keyboard navigation
-        function handleKeyDown(e) {
-            // Always handle Escape, even when results aren't showing
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                closeResults();
-                if (searchInput) searchInput.blur();
-                return;
+                bookmarks.forEach((bookmark, index) => {
+                    const item = createBookmarkItem(bookmark, index);
+                    resultsContainer.appendChild(item);
+                });
             }
 
-            // Other keys only work when results are showing
-            if (!resultsContainer || resultsContainer.style.display === 'none') {
-                return;
+            // Show empty state for search
+            function showEmptyState() {
+                const dbCount = window.starWrenchResidentDB ? window.starWrenchResidentDB.getCount() : 0;
+
+                if (dbCount === 0) {
+                    resultsContainer.innerHTML = `
+                        <div class="starwrench-instant-search-empty">
+                            <h3>No resident data available</h3>
+                            <p>To populate the search index:</p>
+                            <ol>
+                                <li>Navigate to <strong>Main → Entries</strong></li>
+                                <li>Filter to the residents you want to index</li>
+                                <li>Click <strong>Print the view as report</strong></li>
+                                <li>Select <strong>CSV</strong> format</li>
+                                <li>Drag and drop the CSV file onto <strong>this search window</strong></li>
+                            </ol>
+                        </div>
+                    `;
+                } else {
+                    resultsContainer.innerHTML = `
+                        <div class="starwrench-instant-search-empty">
+                            <p>No results found for "${searchInput.value}"</p>
+                            <p style="font-size: 12px; margin-top: 8px;">Try searching by name, entry ID, or room number</p>
+                        </div>
+                    `;
+                }
+                resultsContainer.classList.add('visible');
             }
 
-            const itemCount = currentResults.length > 20 ? 20 : currentResults.length;
+            // Show search results
+            function showSearchResults(results) {
+                currentResults = results;
+                selectedIndex = -1;
+                resultsContainer.innerHTML = '';
+                resultsContainer.classList.add('visible');
 
-            switch (e.key) {
-                case 'Tab':
-                    e.preventDefault();
-                    // Toggle between current and historic
-                    showCurrentOnly = !showCurrentOnly;
-                    // Update radio buttons
-                    const currentRadio = document.getElementById('starwrench-filter-current');
-                    const historicRadio = document.getElementById('starwrench-filter-historic');
-                    if (currentRadio && historicRadio) {
-                        currentRadio.checked = showCurrentOnly;
-                        historicRadio.checked = !showCurrentOnly;
+                if (results.length === 0) {
+                    showEmptyState();
+                    return;
+                }
+
+                results.slice(0, 20).forEach((resident, index) => {
+                    const item = createResidentItem(resident, index);
+                    resultsContainer.appendChild(item);
+                });
+            }
+
+            // Handle search
+            function handleSearch(query) {
+                clearTimeout(searchTimeout);
+
+                if (!query || query.trim().length === 0) {
+                    // Clear search - return to bookmarks
+                    switchMode(SEARCH_MODE_BOOKMARKS);
+                    return;
+                }
+
+                // When typing, switch to current mode if in bookmarks
+                if (currentMode === SEARCH_MODE_BOOKMARKS) {
+                    switchMode(SEARCH_MODE_CURRENT);
+                    return; // switchMode will call handleSearch again
+                }
+
+                searchTimeout = setTimeout(() => {
+                    if (!window.starWrenchResidentDB) {
+                        showEmptyState();
+                        return;
                     }
-                    toggleFilter();
-                    break;
 
-                case 'ArrowDown':
+                    const searchCurrentOnly = currentMode === SEARCH_MODE_CURRENT;
+                    const results = window.starWrenchResidentDB.search(query.trim(), searchCurrentOnly);
+                    showSearchResults(results);
+                }, 150);
+            }
+
+            // Handle keyboard navigation
+            function handleKeyDown(e) {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closeModal();
+                    return;
+                }
+
+                if (e.key === 'Tab') {
+                    e.preventDefault();
+                    // Cycle through modes: bookmarks -> current -> historic -> bookmarks
+                    if (currentMode === SEARCH_MODE_BOOKMARKS) {
+                        switchMode(SEARCH_MODE_CURRENT);
+                    } else if (currentMode === SEARCH_MODE_CURRENT) {
+                        switchMode(SEARCH_MODE_HISTORIC);
+                    } else {
+                        switchMode(SEARCH_MODE_BOOKMARKS);
+                    }
+                    return;
+                }
+
+                const itemCount = currentResults.length > 20 ? 20 : currentResults.length;
+
+                if (e.key === 'ArrowDown') {
                     e.preventDefault();
                     if (selectedIndex < itemCount - 1) {
                         setSelectedIndex(selectedIndex + 1);
                     }
-                    break;
-
-                case 'ArrowUp':
+                } else if (e.key === 'ArrowUp') {
                     e.preventDefault();
                     if (selectedIndex > 0) {
                         setSelectedIndex(selectedIndex - 1);
+                    } else if (selectedIndex === -1 && itemCount > 0) {
+                        setSelectedIndex(itemCount - 1);
                     }
-                    break;
-
-                case 'Enter':
+                } else if (e.key === 'Enter') {
                     e.preventDefault();
                     if (selectedIndex >= 0 && currentResults[selectedIndex]) {
-                        navigateToResident(currentResults[selectedIndex].entryId);
-                        closeResults();
-                        if (searchInput) searchInput.value = '';
+                        // Check if it's a bookmark or resident
+                        const result = currentResults[selectedIndex];
+                        if (result.url) {
+                            navigateToUrl(result.url);
+                        } else if (result.entryId) {
+                            navigateToResident(result.entryId);
+                        }
                     }
-                    break;
+                }
             }
+
+            // Open modal
+            function openModal() {
+                modal.style.display = 'flex';
+                searchInput.value = '';
+                currentResults = [];
+                selectedIndex = -1;
+
+                // Reset to bookmarks mode
+                switchMode(SEARCH_MODE_BOOKMARKS);
+
+                // Focus input after a brief delay
+                setTimeout(() => {
+                    searchInput.focus();
+                }, 50);
+            }
+
+            // Close modal
+            function closeModal() {
+                modal.style.display = 'none';
+                searchInput.value = '';
+                resultsContainer.innerHTML = '';
+                resultsContainer.classList.remove('visible');
+                currentResults = [];
+                selectedIndex = -1;
+            }
+
+            // Event listeners
+            searchInput.addEventListener('input', (e) => handleSearch(e.target.value));
+            searchInput.addEventListener('keydown', handleKeyDown);
+
+            // Click handlers for tabs
+            currentTab.addEventListener('click', () => switchMode(SEARCH_MODE_CURRENT));
+            historicTab.addEventListener('click', () => switchMode(SEARCH_MODE_HISTORIC));
+            bookmarksTab.addEventListener('click', () => switchMode(SEARCH_MODE_BOOKMARKS));
+
+            // Click outside to close
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    closeModal();
+                }
+            });
+
+            // Global escape handler (even when input not focused)
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && modal.style.display === 'flex') {
+                    e.preventDefault();
+                    closeModal();
+                }
+            });
+
+            // Setup drag-and-drop on modal container
+            setupDragAndDropOnModal(container);
+
+            return { openModal, closeModal };
         }
 
-        // Replace the search input
-        function replaceSearchInput() {
+        // Setup drag-and-drop on modal container
+        function setupDragAndDropOnModal(targetElement) {
+            targetElement.addEventListener('dragenter', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                targetElement.classList.add('drag-over');
+            });
+
+            targetElement.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+
+            targetElement.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Only remove if leaving the container itself, not a child
+                if (e.target === targetElement) {
+                    targetElement.classList.remove('drag-over');
+                }
+            });
+
+            targetElement.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                targetElement.classList.remove('drag-over');
+
+                const files = e.dataTransfer.files;
+                if (files.length === 0) return;
+
+                const file = files[0];
+                if (!file.name.endsWith('.csv')) {
+                    alert('Please drop a CSV file');
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const csvText = event.target.result;
+
+                        if (!window.starWrenchResidentDB || !window.starWrenchResidentDB.importCSV) {
+                            alert('Resident database not available');
+                            return;
+                        }
+
+                        const result = window.starWrenchResidentDB.importCSV(csvText);
+
+                        if (typeof starrez !== 'undefined' && starrez.ui && starrez.ui.ShowAlertMessage) {
+                            starrez.ui.ShowAlertMessage(
+                                `CSV imported successfully!\n\nAdded: ${result.addedCount}\nUpdated: ${result.updatedCount}\nTotal: ${result.totalRecords}`,
+                                'success'
+                            );
+                        } else {
+                            alert(`CSV imported successfully!\n\nAdded: ${result.addedCount}\nUpdated: ${result.updatedCount}\nTotal: ${result.totalRecords}`);
+                        }
+                    } catch (error) {
+                        if (typeof starrez !== 'undefined' && starrez.ui && starrez.ui.ShowAlertMessage) {
+                            starrez.ui.ShowAlertMessage(`Failed to import CSV: ${error.message}`, 'error');
+                        } else {
+                            alert(`Failed to import CSV: ${error.message}`);
+                        }
+                    }
+                };
+                reader.readAsText(file);
+            });
+        }
+
+        // Add quick access hint between breadcrumb and search bar
+        function addSearchHint() {
             const originalSearch = document.querySelector('habitat-search-input#header-global-search');
             if (!originalSearch) {
-                console.log('[ResidentSearch] Original search input not found');
+                console.log('[QuickAccess] Original search input not found');
                 return false;
             }
 
-            // Create wrapper for positioning
-            const wrapper = document.createElement('div');
-            wrapper.style.cssText = `
-                position: relative;
-                display: inline-block;
-                width: 100%;
-            `;
+            // Check if hint already exists
+            if (document.getElementById('starwrench-search-hint')) {
+                return true;
+            }
 
-            // Create new search input
-            const newSearch = document.createElement('input');
-            newSearch.id = 'starwrench-resident-search-input';
-            newSearch.type = 'text';
-            newSearch.placeholder = 'Search residents...';
-            newSearch.setAttribute('aria-label', 'Search residents');
-            newSearch.setAttribute('autocomplete', 'off');
-            newSearch.style.cssText = `
-                border: 1px solid var(--color-grey-g30, #ccc);
-                height: var(--control-compact-size, 32px);
-                background: white;
-                border-radius: var(--control-border-radius, 4px);
-                padding: 0 32px 0 8px;
-                width: 100%;
-                font-size: 14px;
-                outline: none;
-                box-sizing: border-box;
-            `;
+            // Create hint text with kbd element
+            const hintContainer = document.createElement('span');
+            hintContainer.id = 'starwrench-search-hint';
 
-            // Create keyboard shortcut badge
-            const kbdBadge = document.createElement('kbd');
-            kbdBadge.textContent = '/';
-            kbdBadge.style.cssText = `
-                position: absolute;
-                right: 8px;
-                top: 50%;
-                transform: translateY(-50%);
+            // Create kbd element for the slash
+            const kbdElement = document.createElement('kbd');
+            kbdElement.textContent = '/';
+            kbdElement.style.cssText = `
                 background: var(--color-grey-g20, #f0f0f0);
                 border: 1px solid var(--color-grey-g30, #ccc);
                 border-radius: 3px;
@@ -1863,82 +2412,46 @@
                 font-size: 11px;
                 font-family: monospace;
                 color: var(--color-grey-g60, #666);
-                pointer-events: none;
                 line-height: 1;
                 box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                margin-right: 4px;
             `;
 
-            // Focus styling
-            newSearch.addEventListener('focus', () => {
-                newSearch.style.outline = '2px solid var(--color-blue-b60, #0066cc)';
-                newSearch.style.borderColor = 'var(--color-blue-b60, #0066cc)';
-                kbdBadge.style.display = 'none';
-            });
+            // Assemble hint: "/ for quick access"
+            hintContainer.appendChild(kbdElement);
+            hintContainer.appendChild(document.createTextNode('for quick access'));
 
-            newSearch.addEventListener('blur', () => {
-                newSearch.style.outline = 'none';
-                newSearch.style.borderColor = 'var(--color-grey-g30, #ccc)';
-                kbdBadge.style.display = 'block';
-                // Delay closing to allow clicks on results
-                setTimeout(closeResults, 200);
-            });
-
-            // Create results container
-            resultsContainer = createResultsContainer();
-
-            // Assemble
-            wrapper.appendChild(newSearch);
-            wrapper.appendChild(kbdBadge);
-            wrapper.appendChild(resultsContainer);
-
-            // Replace original
-            originalSearch.parentNode.replaceChild(wrapper, originalSearch);
-            searchInput = newSearch;
-
-            // Add event listeners
-            searchInput.addEventListener('input', (e) => handleSearch(e.target.value));
-            searchInput.addEventListener('keydown', handleKeyDown);
-
-            // Click outside to close
-            document.addEventListener('click', (e) => {
-                if (!wrapper.contains(e.target)) {
-                    closeResults();
-                }
-            });
-
-            // Global keyboard shortcuts for focusing search
-            document.addEventListener('keydown', (e) => {
-                // Handle "/" key - focus search unless already in an input/textarea
-                if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {
-                    e.preventDefault();
-                    searchInput.focus();
-                    return;
-                }
-
-                // Handle Ctrl+K - focus search, or allow browser default if already focused
-                if (e.ctrlKey && e.key === 'k') {
-                    if (document.activeElement !== searchInput) {
-                        e.preventDefault();
-                        searchInput.focus();
-                    }
-                    // If searchInput already has focus, don't preventDefault to allow browser default
-                }
-            });
+            // Insert hint BEFORE the search input (between breadcrumb and search)
+            originalSearch.parentNode.insertBefore(hintContainer, originalSearch);
 
             return true;
         }
 
         // Initialize the plugin
         function initialize() {
-            waitForDatabase(() => {
-                setTimeout(() => {
-                    const success = replaceSearchInput();
-                    if (!success) {
-                        // Retry after a delay
-                        setTimeout(() => replaceSearchInput(), 2000);
-                    }
-                }, 1500);
+            // Inject styles immediately
+            injectStyles();
+
+            // Create instant search modal
+            const instantSearch = createInstantSearchModal();
+
+            // Global keyboard shortcut for "/" to open search
+            document.addEventListener('keydown', (e) => {
+                // Handle "/" key - open search unless already in an input/textarea
+                if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {
+                    e.preventDefault();
+                    instantSearch.openModal();
+                }
             });
+
+            // Add hint much faster to prevent layout jank
+            setTimeout(() => {
+                const success = addSearchHint();
+                if (!success) {
+                    // Retry after a shorter delay
+                    setTimeout(() => addSearchHint(), 500);
+                }
+            }, 100);
         }
 
         initialize();
@@ -2895,534 +3408,6 @@
         setTimeout(tryInsertLinks, 500); // Try immediately on load
     }
 
-    // RESIDENT DATABASE PLUGIN
-    function initResidentDatabasePlugin() {
-        const RESIDENT_DB_KEY = 'starWrenchResidentDatabase';
-        const RESIDENT_DB_META_KEY = 'starWrenchResidentDatabaseMeta';
-        const CURRENT_STATUSES = ['Reserved', 'Tentative', 'In Room'];
-        const EXCLUDED_STATUSES = ['Admin'];
-
-        // Database structure: { entryId: { nameFirst, namePreferred, nameLast, entryId, roomSpace, status, lastUpdated } }
-        let residentDB = {};
-        let lastKnownDataHash = '';
-        let isProcessing = false;
-
-        // Load database from localStorage
-        function loadDatabase() {
-            try {
-                const stored = localStorage.getItem(RESIDENT_DB_KEY);
-                if (stored) {
-                    residentDB = JSON.parse(stored);
-                } else {
-                    residentDB = {};
-                }
-            } catch (error) {
-                console.error('[ResidentDB] Failed to load database:', error);
-                residentDB = {};
-            }
-        }
-
-        // Save database to localStorage
-        function saveDatabase() {
-            try {
-                localStorage.setItem(RESIDENT_DB_KEY, JSON.stringify(residentDB));
-                localStorage.setItem(RESIDENT_DB_META_KEY, JSON.stringify({
-                    lastUpdated: new Date().toISOString(),
-                    recordCount: Object.keys(residentDB).length
-                }));
-            } catch (error) {
-                console.error('[ResidentDB] Failed to save database:', error);
-            }
-        }
-
-        // Extract text content from a table cell by class name
-        function getCellText(row, className) {
-            const cell = row.querySelector(`td.${className} .data-column`);
-            if (!cell) return '';
-            return cell.textContent.trim();
-        }
-
-        // Process a single table row
-        function processRow(row) {
-            const entryId = row.getAttribute('data-id');
-            if (!entryId) return null;
-
-            const status = getCellText(row, 'EntryStatusEnum');
-            const nameFirst = getCellText(row, 'NameFirst');
-            const namePreferred = getCellText(row, 'NamePreferred');
-            const nameLast = getCellText(row, 'NameLast');
-            const roomSpace = getCellText(row, 'RoomSpace_Description');
-
-            return {
-                entryId,
-                nameFirst,
-                namePreferred,
-                nameLast,
-                roomSpace,
-                status,
-                lastUpdated: new Date().toISOString()
-            };
-        }
-
-        // Update the database with current page data
-        function updateDatabase() {
-            if (isProcessing) return;
-            isProcessing = true;
-
-            try {
-                const table = document.querySelector('table.directory-grid tbody');
-                if (!table) {
-                    isProcessing = false;
-                    return;
-                }
-
-                const rows = table.querySelectorAll('tr[data-id]');
-                if (rows.length === 0) {
-                    isProcessing = false;
-                    return;
-                }
-
-                let addedCount = 0;
-                let updatedCount = 0;
-                let removedCount = 0;
-                const processedIds = new Set();
-
-                // Process each row
-                rows.forEach(row => {
-                    const data = processRow(row);
-                    if (!data) return;
-
-                    processedIds.add(data.entryId);
-
-                    // Check if this resident should be excluded (Admin status)
-                    if (EXCLUDED_STATUSES.includes(data.status)) {
-                        // Remove if exists
-                        if (residentDB[data.entryId]) {
-                            delete residentDB[data.entryId];
-                            removedCount++;
-                        }
-                        return;
-                    }
-
-                    // Store all other residents
-                    const existing = residentDB[data.entryId];
-
-                    if (!existing) {
-                        // New resident
-                        residentDB[data.entryId] = data;
-                        addedCount++;
-                    } else {
-                        // Check if anything changed
-                        const changed =
-                            existing.nameFirst !== data.nameFirst ||
-                            existing.namePreferred !== data.namePreferred ||
-                            existing.nameLast !== data.nameLast ||
-                            existing.roomSpace !== data.roomSpace ||
-                            existing.status !== data.status;
-
-                        if (changed) {
-                            residentDB[data.entryId] = data;
-                            updatedCount++;
-                        }
-                    }
-                });
-
-                // Check for residents that are no longer on the page but were previously stored
-                // (This handles cases where residents changed status on a different page)
-                // We don't remove them here as they might just not be on this page of results
-
-                if (addedCount > 0 || updatedCount > 0 || removedCount > 0) {
-                    saveDatabase();
-                }
-
-            } catch (error) {
-                console.error('[ResidentDB] Error updating database:', error);
-            }
-
-            isProcessing = false;
-        }
-
-        // Debounced update function
-        let updateTimeout;
-        function scheduleUpdate(delay = 500) {
-            clearTimeout(updateTimeout);
-            updateTimeout = setTimeout(updateDatabase, delay);
-        }
-
-        // Check if we're on the directory page
-        function isOnDirectoryPage() {
-            return window.location.href.includes('/StarRezWeb/main/directory') ||
-                   window.location.href.includes('/StarRezWeb/Main/Directory');
-        }
-
-        // Initialize the plugin
-        function initialize() {
-            // Always load the database from localStorage, regardless of page
-            loadDatabase();
-
-            if (!isOnDirectoryPage()) {
-                return;
-            }
-
-            // Initial scan after page loads
-            setTimeout(() => {
-                updateDatabase();
-            }, 2000);
-
-            // Watch for AJAX requests to GetPagedData
-            const originalFetch = window.fetch;
-            window.fetch = function(...args) {
-                const url = args[0];
-
-                // Intercept GetPagedData requests
-                if (typeof url === 'string' && url.includes('/Main/Directory/GetPagedData')) {
-                    return originalFetch.apply(this, args).then(response => {
-                        // Clone response so we can read it
-                        const clonedResponse = response.clone();
-
-                        // Schedule update after the DOM has been updated
-                        scheduleUpdate(800);
-
-                        return response;
-                    });
-                }
-
-                return originalFetch.apply(this, args);
-            };
-
-            // Also watch for DOM changes as a backup
-            const observer = new MutationObserver((mutations) => {
-                const hasTableChanges = mutations.some(mutation => {
-                    return Array.from(mutation.addedNodes).some(node => {
-                        if (node.nodeType === Node.ELEMENT_NODE) {
-                            return node.matches && (
-                                node.matches('tr[data-id]') ||
-                                node.querySelector && node.querySelector('tr[data-id]')
-                            );
-                        }
-                        return false;
-                    });
-                });
-
-                if (hasTableChanges) {
-                    scheduleUpdate(1000);
-                }
-            });
-
-            // Observe the table container
-            setTimeout(() => {
-                const tableContainer = document.querySelector('table.directory-grid');
-                if (tableContainer) {
-                    observer.observe(tableContainer, {
-                        childList: true,
-                        subtree: true
-                    });
-                }
-            }, 1500);
-        }
-
-        // Update a single entry in the database
-        function updateEntry(entryId, data) {
-            if (!entryId || !data) return false;
-
-            // Don't store excluded statuses
-            if (EXCLUDED_STATUSES.includes(data.status)) {
-                if (residentDB[entryId]) {
-                    delete residentDB[entryId];
-                    saveDatabase();
-                }
-                return false;
-            }
-
-            const existing = residentDB[entryId];
-            const changed = !existing ||
-                existing.nameFirst !== data.nameFirst ||
-                existing.namePreferred !== data.namePreferred ||
-                existing.nameLast !== data.nameLast ||
-                existing.roomSpace !== data.roomSpace ||
-                existing.status !== data.status;
-
-            if (changed) {
-                residentDB[entryId] = {
-                    entryId,
-                    nameFirst: data.nameFirst || '',
-                    namePreferred: data.namePreferred || '',
-                    nameLast: data.nameLast || '',
-                    roomSpace: data.roomSpace || '',
-                    status: data.status || '',
-                    lastUpdated: new Date().toISOString()
-                };
-                saveDatabase();
-                return true;
-            }
-
-            return false;
-        }
-
-        // Expose search function for other plugins to use
-        window.starWrenchResidentDB = {
-            search: function(query, currentOnly = true) {
-                if (!query || typeof query !== 'string') return [];
-
-                const lowerQuery = query.toLowerCase();
-                const results = [];
-
-                Object.values(residentDB).forEach(resident => {
-                    // Filter by status based on currentOnly flag
-                    const isCurrent = CURRENT_STATUSES.includes(resident.status);
-
-                    // If currentOnly is true, skip non-current residents
-                    // If currentOnly is false, skip current residents (show only historical)
-                    if (currentOnly && !isCurrent) {
-                        return;
-                    }
-                    if (!currentOnly && isCurrent) {
-                        return;
-                    }
-
-                    const searchableText = [
-                        resident.nameFirst,
-                        resident.namePreferred,
-                        resident.nameLast,
-                        resident.entryId,
-                        resident.roomSpace
-                    ].join(' ').toLowerCase();
-
-                    if (searchableText.includes(lowerQuery)) {
-                        results.push(resident);
-                    }
-                });
-
-                return results;
-            },
-            getById: function(entryId) {
-                return residentDB[entryId] || null;
-            },
-            getAll: function(currentOnly = true) {
-                const all = Object.values(residentDB);
-                if (currentOnly) {
-                    return all.filter(r => CURRENT_STATUSES.includes(r.status));
-                }
-                return all;
-            },
-            getCount: function() {
-                return Object.keys(residentDB).length;
-            },
-            refresh: function() {
-                updateDatabase();
-            },
-            updateEntry: function(entryId, data) {
-                return updateEntry(entryId, data);
-            }
-        };
-
-        initialize();
-    }
-
-    // ENTRY WATCHER PLUGIN (Background Service)
-    // Watches for entry detail screens and updates the resident database
-    function initEntryWatcherPlugin() {
-        let lastProcessedHash = '';
-        let processingTimeout = null;
-
-        // Parse entry ID from URL hash
-        function getEntryIdFromHash() {
-            const hash = window.location.hash;
-            // Match pattern like #!entry:39073:rez%20360 or #!entry:39073
-            const match = hash.match(/#!entry:(\d+)/i);
-            return match ? match[1] : null;
-        }
-
-        // Wait for detail screen to appear and scrape data
-        function scrapeEntryData(entryId, attempts = 0) {
-            if (attempts > 50) {
-                return;
-            }
-
-            const detailScreen = document.querySelector(`#entry${entryId}-detail-screen`);
-            if (!detailScreen) {
-                // Wait and retry
-                setTimeout(() => scrapeEntryData(entryId, attempts + 1), 500);
-                return;
-            }
-
-            try {
-                // Find Entry Status field by looking within each li element
-                let status = '';
-                const listItems = detailScreen.querySelectorAll('li');
-
-                for (const li of listItems) {
-                    const pElements = li.querySelectorAll('p');
-                    if (pElements.length >= 2 && pElements[0].textContent.trim() === 'Entry Status') {
-                        status = pElements[1].textContent.trim();
-                        break;
-                    }
-                }
-
-                // Parse name from header: "Hollows, Nathan (Nathan) - [InRoom]"
-                const headerElement = detailScreen.querySelector('.ui-header_caption.header_caption .ui-detail-header.detail-header-heading');
-                if (!headerElement) {
-                    setTimeout(() => scrapeEntryData(entryId, attempts + 1), 500);
-                    return;
-                }
-
-                const headerText = headerElement.textContent.trim();
-                // Remove status suffix like " - [InRoom]"
-                const nameText = headerText.replace(/\s*-\s*\[.*?\]\s*$/, '');
-
-                // Parse "Hollows, Nathan (Nathan)" format
-                // Format: LastName, FirstName (PreferredName)
-                const nameMatch = nameText.match(/^([^,]+),\s*([^(]+)(?:\(([^)]+)\))?/);
-                if (!nameMatch) {
-                    return;
-                }
-
-                const nameLast = nameMatch[1].trim();
-                const nameFirst = nameMatch[2].trim();
-                const namePreferred = nameMatch[3] ? nameMatch[3].trim() : '';
-
-                // Find Room field - use null to indicate "not found"
-                // Search more broadly since Room might be in a different container
-                let roomSpace = null;
-                let roomFieldFound = false;
-
-                // First try within detailScreen
-                for (const li of listItems) {
-                    const pElements = li.querySelectorAll('p');
-                    if (pElements.length >= 1) {
-                        const labelText = pElements[0].textContent.trim();
-                        if (labelText === 'Room' || labelText === 'Room:') {
-                            roomFieldFound = true;
-                            // Find the span within this li
-                            const spanElement = li.querySelector('span');
-                            if (spanElement) {
-                                const roomText = spanElement.textContent.trim();
-                                // Parse format: "KF-LC03b-02/KF-LC03b-02" or "/"
-                                if (roomText === '/') {
-                                    roomSpace = ''; // Explicitly no room assigned
-                                } else if (roomText.includes('/')) {
-                                    // Take the first part before the slash
-                                    roomSpace = roomText.split('/')[0].trim();
-                                } else {
-                                    roomSpace = roomText;
-                                }
-                            }
-                            break;
-                        }
-                    }
-                }
-
-                // If not found in detailScreen, search the entire document
-                if (!roomFieldFound) {
-                    const allListItems = document.querySelectorAll('li');
-
-                    for (const li of allListItems) {
-                        const pElements = li.querySelectorAll('p');
-                        if (pElements.length >= 1) {
-                            const labelText = pElements[0].textContent.trim();
-                            if (labelText === 'Room' || labelText === 'Room:') {
-                                roomFieldFound = true;
-                                const spanElement = li.querySelector('span');
-                                if (spanElement) {
-                                    const roomText = spanElement.textContent.trim();
-                                    if (roomText === '/') {
-                                        roomSpace = '';
-                                    } else if (roomText.includes('/')) {
-                                        roomSpace = roomText.split('/')[0].trim();
-                                    } else {
-                                        roomSpace = roomText;
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Get existing record to preserve roomSpace if we didn't find it
-                const existing = window.starWrenchResidentDB ? window.starWrenchResidentDB.getById(entryId) : null;
-
-                // Validate we have minimum required data
-                if (!status || !nameLast || !nameFirst) {
-                    setTimeout(() => scrapeEntryData(entryId, attempts + 1), 500);
-                    return;
-                }
-
-                // If status is "In Room", "Reserved", or "Tentative", we MUST wait for Room field to appear
-                const statusesNeedingRoom = ['In Room', 'Reserved', 'Tentative'];
-                if (statusesNeedingRoom.includes(status) && !roomFieldFound) {
-                    setTimeout(() => scrapeEntryData(entryId, attempts + 1), 500);
-                    return;
-                }
-
-                // Validate room data consistency
-                // If status is "In Room" but room shows "/", the room data hasn't loaded yet - retry
-                if (status === 'In Room' && roomSpace === '') {
-                    setTimeout(() => scrapeEntryData(entryId, attempts + 1), 500);
-                    return;
-                }
-
-                // Determine final room space value
-                const finalRoomSpace = roomSpace !== null ? roomSpace : (existing ? existing.roomSpace : '');
-
-                // Update the database
-                if (window.starWrenchResidentDB && window.starWrenchResidentDB.updateEntry) {
-                    const data = {
-                        nameFirst,
-                        namePreferred,
-                        nameLast,
-                        roomSpace: finalRoomSpace,
-                        status
-                    };
-
-                    window.starWrenchResidentDB.updateEntry(entryId, data);
-                }
-
-            } catch (error) {
-                console.error(`[EntryWatcher] Error scraping entry ${entryId}:`, error);
-            }
-        }
-
-        // Process hash change
-        function processHashChange() {
-            const currentHash = window.location.hash;
-
-            // Avoid processing the same hash multiple times
-            if (currentHash === lastProcessedHash) {
-                return;
-            }
-
-            lastProcessedHash = currentHash;
-
-            // Clear any pending processing
-            clearTimeout(processingTimeout);
-
-            const entryId = getEntryIdFromHash();
-            if (entryId) {
-                // Wait a bit for the page to start loading, then scrape
-                processingTimeout = setTimeout(() => {
-                    scrapeEntryData(entryId);
-                }, 500);
-            }
-        }
-
-        // Initialize
-        function initialize() {
-            // Watch for hash changes (when browser triggers it)
-            window.addEventListener('hashchange', processHashChange);
-
-            // Poll for hash changes (StarRez doesn't always trigger hashchange)
-            setInterval(() => {
-                processHashChange();
-            }, 1000);
-
-            // Process current hash on load
-            processHashChange();
-        }
-
-        initialize();
-    }
-
     // ================================
     // PLUGIN INITIALIZATION
     // ================================
@@ -3457,7 +3442,7 @@
                 initAutoLinkerPlugin();
                 break;
             case 'residentSearch':
-                initResidentSearchPlugin();
+                initQuickAccessPlugin();
                 break;
             case 'quickAddParticipants':
                 initQuickAddParticipantsPlugin();
@@ -3490,8 +3475,7 @@
 
         // Initialize background services (always on, not user-configurable)
         setTimeout(() => {
-            initResidentDatabasePlugin();
-            initEntryWatcherPlugin();
+            initResidentDatabaseFromCSV();
         }, 500);
 
         // Initialize enabled plugins
