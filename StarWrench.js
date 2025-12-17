@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.8.0
+// @version      1.9.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.8.0';
+    const SUITE_VERSION = '1.9.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -84,6 +84,11 @@
                 enabled: true,
                 name: '📂 SharePoint Links',
                 description: 'Add SharePoint directory links to room detail pages for configured halls'
+            },
+            incidentTemplates: {
+                enabled: true,
+                name: '📝 Incident Templates',
+                description: 'Quick templates for incident reports (e.g., Shift Report template)'
             }
         }
     };
@@ -3427,6 +3432,194 @@
         setTimeout(tryInsertLinks, 500); // Try immediately on load
     }
 
+    // INCIDENT TEMPLATES PLUGIN
+    function initIncidentTemplatesPlugin() {
+        let processedModals = new Set();
+
+        const styles = document.createElement('style');
+        styles.textContent = `
+            .incident-template-link {
+                float: right;
+                font-size: 12px;
+                color: #666;
+                margin-left: 10px;
+                min-width: fit-content;
+            }
+            .incident-template-link a {
+                color: #0077cc !important;
+                text-decoration: underline !important;
+                cursor: pointer !important;
+            }
+            .incident-template-link a:hover {
+                color: #005fa3 !important;
+            }
+        `;
+        document.head.appendChild(styles);
+
+        function isIncidentModalOpen() {
+            try {
+                if (typeof starrez === 'undefined' || !starrez.popup) {
+                    return false;
+                }
+
+                var $visiblePopup = document.querySelector('.ui-popup-parent:not(.hide)');
+                if (!$visiblePopup) {
+                    return false;
+                }
+
+                var headerElement = $visiblePopup.querySelector('.ui-popup-header');
+                if (!headerElement) {
+                    return false;
+                }
+
+                var headerText = headerElement.textContent.trim();
+                return headerText === 'Incident';
+
+            } catch (error) {
+                console.error('Error checking modal state:', error);
+                return false;
+            }
+        }
+
+        function getModalId($modal) {
+            var modalId = $modal.getAttribute('id');
+            if (!modalId) {
+                modalId = $modal.querySelector('.ui-popup-header');
+                if (modalId) {
+                    modalId = modalId.textContent.trim() + '-' + Date.now();
+                }
+            }
+            return modalId || 'unknown-' + Date.now();
+        }
+
+        function addTemplateButton() {
+            try {
+                if (!isIncidentModalOpen()) {
+                    return;
+                }
+
+                var $modal = document.querySelector('.ui-popup-parent:not(.hide)');
+                if (!$modal) {
+                    return;
+                }
+
+                var modalId = getModalId($modal);
+                if (processedModals.has(modalId)) {
+                    return;
+                }
+
+                var $whatHappenedHeader = null;
+                var headers = $modal.querySelectorAll('.fieldset-block .header');
+
+                for (var i = 0; i < headers.length; i++) {
+                    var caption = headers[i].querySelector('.ui-fieldset-caption');
+                    if (caption && caption.textContent.trim() === 'What happened?') {
+                        $whatHappenedHeader = headers[i];
+                        break;
+                    }
+                }
+
+                if (!$whatHappenedHeader) {
+                    return;
+                }
+
+                if ($whatHappenedHeader.querySelector('.incident-template-link')) {
+                    processedModals.add(modalId);
+                    return;
+                }
+
+                var templateContainer = document.createElement('div');
+                templateContainer.className = 'incident-template-link';
+                templateContainer.innerHTML = 'Templates: <a href="#" id="shift-report-template-link">Shift Report</a>';
+
+                $whatHappenedHeader.appendChild(templateContainer);
+                processedModals.add(modalId);
+
+                var link = templateContainer.querySelector('#shift-report-template-link');
+                if (link) {
+                    link.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        applyShiftReportTemplate($modal);
+                    });
+                }
+
+            } catch (error) {
+                console.error('Error adding template button:', error);
+            }
+        }
+
+        function applyShiftReportTemplate($modal) {
+            try {
+                var titleInput = $modal.querySelector('input[name="Title"]');
+                var descriptionTextarea = $modal.querySelector('textarea[name="Description"]');
+
+                if (!titleInput || !descriptionTextarea) {
+                    console.error('Could not find Title or Description fields');
+                    return;
+                }
+
+                titleInput.value = 'Shift Report - HALL | 7:00-2:30 2:30-10:00';
+                descriptionTextarea.value = '# Follow up required: Yes/No\n\n# Resident interactions\n\n- \n\n# Tasks\n\n- \n\n# Incidents (IDs or "none to note")\n\n- \n\n# Duty rounds\n\n- \n- \n- \n';
+
+                if (typeof starrez !== 'undefined' &&
+                    typeof starrez.library !== 'undefined' &&
+                    starrez.library.controls &&
+                    starrez.library.controls.FlagChanged) {
+
+                    var titleControl = titleInput.closest('.edit-control');
+                    var descControl = descriptionTextarea.closest('.edit-control');
+
+                    if (titleControl && titleControl.id) {
+                        var $titleControl = document.getElementById(titleControl.id);
+                        if ($titleControl && window.$ && window.$($titleControl)) {
+                            starrez.library.controls.FlagChanged(window.$($titleControl));
+                        }
+                    }
+
+                    if (descControl && descControl.id) {
+                        var $descControl = document.getElementById(descControl.id);
+                        if ($descControl && window.$ && window.$($descControl)) {
+                            starrez.library.controls.FlagChanged(window.$($descControl));
+                        }
+                    }
+                }
+
+                if (titleInput.dispatchEvent) {
+                    titleInput.dispatchEvent(new Event('change', { bubbles: true }));
+                    titleInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                if (descriptionTextarea.dispatchEvent) {
+                    descriptionTextarea.dispatchEvent(new Event('change', { bubbles: true }));
+                    descriptionTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+
+                console.log('Shift Report template applied successfully');
+
+            } catch (error) {
+                console.error('Error applying shift report template:', error);
+            }
+        }
+
+        function checkForIncidentModal() {
+            try {
+                if (isIncidentModalOpen()) {
+                    addTemplateButton();
+                }
+            } catch (error) {
+                console.error('Error in checkForIncidentModal:', error);
+            }
+        }
+
+        setTimeout(checkForIncidentModal, 1000);
+        setInterval(checkForIncidentModal, 2000);
+
+        var observer = new MutationObserver(function() {
+            setTimeout(checkForIncidentModal, 300);
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
     // ================================
     // PLUGIN INITIALIZATION
     // ================================
@@ -3471,6 +3664,9 @@
                 break;
             case 'sharepointLinks':
                 initSharePointLinksPlugin();
+                break;
+            case 'incidentTemplates':
+                initIncidentTemplatesPlugin();
                 break;
         }
     }
