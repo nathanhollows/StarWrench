@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.9.0
+// @version      1.9.1
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.9.0';
+    const SUITE_VERSION = '1.9.1';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2422,7 +2422,8 @@
                 margin-right: 4px;
             `;
 
-            // Assemble hint: "/ for quick access"
+            // Assemble hint: "type / for quick access"
+            hintContainer.appendChild(document.createTextNode('type '));
             hintContainer.appendChild(kbdElement);
             hintContainer.appendChild(document.createTextNode('for quick access'));
 
