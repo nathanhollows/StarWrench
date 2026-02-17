@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.9.1
+// @version      1.9.2
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.9.1';
+    const SUITE_VERSION = '1.9.2';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -495,60 +495,99 @@
     }
 
     // AUTO-SELECT PLUGIN
+    // Uses StarRez's ToggleDirectorySelection API to select records server-side,
+    // bypassing the need to scroll/render every row in the DOM.
     function initAutoSelectPlugin() {
         function addAutoSelectButton() {
-            const targetButton = document.querySelector('button[aria-label="Add New Item"].sr_button_module_add');
+            var targetButton = document.querySelector('button[aria-label="Add New Item"].sr_button_module_add');
             if (!targetButton || document.querySelector('.auto-select')) return;
 
-            const autoSelectButton = document.createElement('habitat-button');
+            var autoSelectButton = document.createElement('habitat-button');
             autoSelectButton.setAttribute('variant', 'primary');
             autoSelectButton.setAttribute('compact', '');
             autoSelectButton.className = 'ui-order-tabs-button auto-select';
             autoSelectButton.style.cssText = 'top: 0; margin: 0;';
 
-            const icon = document.createElement('habitat-fa-icon');
+            var icon = document.createElement('habitat-fa-icon');
             icon.setAttribute('variant', 'fa-check');
             autoSelectButton.appendChild(icon);
             autoSelectButton.appendChild(document.createTextNode('Auto Select'));
 
-            autoSelectButton.addEventListener('click', () => {
-                const userInput = prompt("Enter IDs to auto-select (separated by newlines, spaces, or tabs):");
-                if (!userInput?.trim()) return;
+            autoSelectButton.addEventListener('click', function() {
+                var userInput = prompt("Enter IDs to auto-select (separated by newlines, spaces, or tabs):");
+                if (!userInput || !userInput.trim()) return;
 
-                const idArray = userInput.split(/[\n\s\t]+/).map(id => id.trim()).filter(id => id.length > 0);
+                var idArray = userInput.split(/[\n\s\t]+/).map(function(id) { return id.trim(); }).filter(function(id) { return id.length > 0; });
                 if (idArray.length === 0) {
                     alert('No valid IDs found.');
                     return;
                 }
 
-                const directoryGrid = document.querySelector('.directory-grid.ui-directory-grid');
-                if (!directoryGrid) {
-                    alert('Directory grid not found.');
+                // Convert to numbers for the API
+                var recordIDs = idArray.map(function(id) { return Number(id); }).filter(function(id) { return !isNaN(id); });
+                if (recordIDs.length === 0) {
+                    alert('No valid numeric IDs found.');
                     return;
                 }
 
-                const allRows = directoryGrid.querySelectorAll('tr[data-id]');
-                const clickedIds = [];
-                const notFoundIds = [...idArray];
-
-                allRows.forEach(row => {
-                    const rowId = row.getAttribute('data-id');
-                    if (idArray.includes(rowId)) {
-                        const checkbox = row.querySelector('td.tick-cell input[type="checkbox"]');
-                        if (checkbox && !checkbox.checked) {
-                            checkbox.click();
-                        }
-                        clickedIds.push(rowId);
-                        const index = notFoundIds.indexOf(rowId);
-                        if (index > -1) notFoundIds.splice(index, 1);
+                // Get the directory manager instance
+                var directoryMgr = null;
+                try {
+                    if (typeof starrez !== 'undefined' && starrez.directory && starrez.directory.GetDirectory) {
+                        directoryMgr = starrez.directory.GetDirectory();
                     }
-                });
-
-                let message = `Auto-select completed!\nSelected: ${clickedIds.length} items\n`;
-                if (notFoundIds.length > 0) {
-                    message += `\nNot found: ${notFoundIds.length <= 20 ? notFoundIds.join(', ') : notFoundIds.length + ' items'}`;
+                } catch (e) {
+                    console.error('StarWrench: Could not get directory manager', e);
                 }
-                alert(message);
+
+                if (!directoryMgr) {
+                    alert('Could not access the directory manager. Make sure you are on a directory page.');
+                    return;
+                }
+
+                var savedListName = directoryMgr.GetSelectionSavedListName();
+                var controller = directoryMgr.options.Controller;
+                var area = MVC.GetControllerArea(controller);
+
+                // Batch IDs in chunks of 200 to avoid oversized requests
+                var BATCH_SIZE = 200;
+                var batches = [];
+                for (var i = 0; i < recordIDs.length; i += BATCH_SIZE) {
+                    batches.push(recordIDs.slice(i, i + BATCH_SIZE));
+                }
+
+                var completedBatches = 0;
+                var finalCount = 0;
+
+                function processBatch(batchIndex) {
+                    if (batchIndex >= batches.length) {
+                        // All batches done — update UI and refresh
+                        directoryMgr.SetDirectoryFooter(finalCount);
+                        directoryMgr.currentSelectionAmount = finalCount;
+                        // Refresh the directory grid to reflect selections visually
+                        directoryMgr.RefreshDirectory(true, directoryMgr.options.LoadCount);
+                        alert('Auto-select completed!\nSent ' + recordIDs.length + ' IDs to server.\n' + finalCount + ' total selected.');
+                        return;
+                    }
+
+                    try {
+                        var call = new MVC.Directory.ToggleDirectorySelection(area, batches[batchIndex], savedListName, true);
+                        call.Controller = controller;
+                        call.Request({ ShowLoading: false }).done(function(amount) {
+                            completedBatches++;
+                            finalCount = amount;
+                            processBatch(batchIndex + 1);
+                        }).fail(function(jqxhr, textStatus, errorThrown) {
+                            console.error('StarWrench: Batch ' + (batchIndex + 1) + ' failed', textStatus, errorThrown);
+                            alert('Auto-select failed on batch ' + (batchIndex + 1) + ' of ' + batches.length + '.\n' + completedBatches + ' batches completed before failure.\nError: ' + textStatus);
+                        });
+                    } catch (e) {
+                        console.error('StarWrench: Error creating API call', e);
+                        alert('Auto-select error: ' + e.message);
+                    }
+                }
+
+                processBatch(0);
             });
 
             targetButton.parentNode.insertBefore(autoSelectButton, targetButton.nextSibling);
@@ -563,8 +602,8 @@
         checkAndAddButton();
 
         // Monitor for page changes
-        let lastTitle = document.title;
-        const observer = new MutationObserver(() => {
+        var lastTitle = document.title;
+        var observer = new MutationObserver(function() {
             if (document.title !== lastTitle) {
                 lastTitle = document.title;
                 setTimeout(checkAndAddButton, 500);
