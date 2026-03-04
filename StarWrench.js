@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.9.2
+// @version      1.9.4
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.9.2';
+    const SUITE_VERSION = '1.9.4';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -89,6 +89,11 @@
                 enabled: true,
                 name: '📝 Incident Templates',
                 description: 'Quick templates for incident reports (e.g., Shift Report template)'
+            },
+            layoutFixes: {
+                enabled: true,
+                name: '📐 Layout Fixes',
+                description: 'Fixes common layout issues: constrains read-more text areas and bulk-edit field widths'
             }
         }
     };
@@ -3570,7 +3575,7 @@
 
                 var templateContainer = document.createElement('div');
                 templateContainer.className = 'incident-template-link';
-                templateContainer.innerHTML = 'Templates: <a href="#" id="shift-report-template-link">Shift Report</a>';
+                templateContainer.innerHTML = 'Templates: <a href="#" id="shift-report-template-link">Shift Report</a> | <a href="#" id="flat-meeting-template-link">Flat Meeting</a>';
 
                 $whatHappenedHeader.appendChild(templateContainer);
                 processedModals.add(modalId);
@@ -3584,8 +3589,24 @@
                     });
                 }
 
+                var flatMeetingLink = templateContainer.querySelector('#flat-meeting-template-link');
+                if (flatMeetingLink) {
+                    flatMeetingLink.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        applyFlatMeetingTemplate($modal);
+                    });
+                }
+
             } catch (error) {
                 console.error('Error adding template button:', error);
+            }
+        }
+
+        function removeFlatMeetingNotes($modal) {
+            var existing = $modal.querySelector('#flat-meeting-notes-li');
+            if (existing) {
+                existing.parentNode.removeChild(existing);
             }
         }
 
@@ -3599,7 +3620,9 @@
                     return;
                 }
 
-                titleInput.value = 'Shift Report - HALL | 7:00-2:30 2:30-10:00';
+                removeFlatMeetingNotes($modal);
+
+                titleInput.value = 'Shift Report - HALL';
                 descriptionTextarea.value = '# Follow up required: Yes/No\n\n# Resident interactions\n\n- \n\n# Tasks\n\n- \n\n# Incidents (IDs or "none to note")\n\n- \n\n# Duty rounds\n\n- \n- \n- \n';
 
                 if (typeof starrez !== 'undefined' &&
@@ -3641,6 +3664,68 @@
             }
         }
 
+        function applyFlatMeetingTemplate($modal) {
+            try {
+                var titleInput = $modal.querySelector('input[name="Title"]');
+                var descriptionTextarea = $modal.querySelector('textarea[name="Description"]');
+
+                if (!titleInput || !descriptionTextarea) {
+                    console.error('Could not find Title or Description fields');
+                    return;
+                }
+
+                removeFlatMeetingNotes($modal);
+
+                titleInput.value = 'Flat Meeting - FLAT';
+                descriptionTextarea.value = '# Meeting summary\n\n\n\n# Individual resident notes (concerns, engagement, things of note)\n\n';
+
+                var descLi = descriptionTextarea.closest('li');
+                if (descLi) {
+                    var notesLi = document.createElement('li');
+                    notesLi.id = 'flat-meeting-notes-li';
+                    notesLi.innerHTML = '<label for="474da9ec73d9400e9967e7c210bbb989_input" title="Description">Notes:</label><div style="display: inline-block; padding-top: 0.6em; max-width: 74ch;">Add something personal/observational for each resident.<br>Upload photos of the rules + roster.<br>Tag all participants. </div>';
+                    descLi.parentNode.insertBefore(notesLi, descLi.nextSibling);
+                }
+
+                if (typeof starrez !== 'undefined' &&
+                    typeof starrez.library !== 'undefined' &&
+                    starrez.library.controls &&
+                    starrez.library.controls.FlagChanged) {
+
+                    var titleControl = titleInput.closest('.edit-control');
+                    var descControl = descriptionTextarea.closest('.edit-control');
+
+                    if (titleControl && titleControl.id) {
+                        var $titleControl = document.getElementById(titleControl.id);
+                        if ($titleControl && window.$ && window.$($titleControl)) {
+                            starrez.library.controls.FlagChanged(window.$($titleControl));
+                        }
+                    }
+
+                    if (descControl && descControl.id) {
+                        var $descControl = document.getElementById(descControl.id);
+                        if ($descControl && window.$ && window.$($descControl)) {
+                            starrez.library.controls.FlagChanged(window.$($descControl));
+                        }
+                    }
+                }
+
+                if (titleInput.dispatchEvent) {
+                    titleInput.dispatchEvent(new Event('change', { bubbles: true }));
+                    titleInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                if (descriptionTextarea.dispatchEvent) {
+                    descriptionTextarea.dispatchEvent(new Event('change', { bubbles: true }));
+                    descriptionTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+
+                console.log('Flat Meeting template applied successfully');
+
+            } catch (error) {
+                console.error('Error applying flat meeting template:', error);
+            }
+        }
+
         function checkForIncidentModal() {
             try {
                 if (isIncidentModalOpen()) {
@@ -3658,6 +3743,23 @@
             setTimeout(checkForIncidentModal, 300);
         });
         observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    // LAYOUT FIXES PLUGIN
+    function initLayoutFixesPlugin() {
+        const style = document.createElement('style');
+        style.textContent = `
+            .textarea[data-add-readmore="True"] {
+                display: inline-block;
+                max-width: 80ch;
+            }
+            .ui-bulkedit-multimodify-content-container input[type="text"],
+            .ui-bulkedit-multimodify-content-container select {
+                width: min-content;
+                max-width: 230px;
+            }
+        `;
+        document.head.appendChild(style);
     }
 
     // ================================
@@ -3707,6 +3809,9 @@
                 break;
             case 'incidentTemplates':
                 initIncidentTemplatesPlugin();
+                break;
+            case 'layoutFixes':
+                initLayoutFixesPlugin();
                 break;
         }
     }
