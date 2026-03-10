@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.9.4
+// @version      1.10.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.9.4';
+    const SUITE_VERSION = '1.10.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2597,53 +2597,52 @@
                 return;
             }
 
-            let data, endpoint;
+            // Show loading state on the search input
+            if (searchInput) {
+                searchInput.disabled = true;
+                searchInput.placeholder = screenInfo.type === 'incident' ? 'Adding participant...' : 'Adding attendee...';
+                searchInput.style.opacity = '0.6';
+            }
+
+            var call;
+            var entryIdStr = entryId.toString();
 
             if (screenInfo.type === 'incident') {
-                // Incident data structure
-                data = {
-                    parentID: parseInt(screenInfo.id, 10),
-                    vm: {
-                        __ChangedFields: [
-                            "IncidentInvolvementID", "Reported", "IdentityKnown", "EntryID", "Name",
-                            "Age", "GenderEnum", "Height", "Weight", "HairColour", "EyeColour",
-                            "Race", "Religion", "Ethnicity", "Demographic", "Comments",
-                            "LinkRelationship", "WorkflowID"
-                        ],
+                // Use the AddMultipleParticipants wizard endpoint (broader permission support)
+                var formData = JSON.stringify({
+                    IncidentInvolvementID: "0",
+                    Reported: false,
+                    SelectedEntries: entryIdStr,
+                    EntryID: entryIdStr,
+                    Comments: "",
+                    AddAnother: false,
+                    MultiStepData: [{
+                        __ChangedFields: ["IncidentInvolvementID", "Reported", "SelectedEntries", "EntryID", "Comments", "AddAnother"],
                         IncidentInvolvementID: "0",
                         Reported: false,
-                        IdentityKnown: true,
-                        EntryID: entryId.toString(),
-                        Name: "",
-                        Age: "",
-                        GenderEnum: "0",
-                        Height: "",
-                        Weight: "",
-                        HairColour: "",
-                        EyeColour: "",
-                        Race: "",
-                        Religion: "",
-                        Ethnicity: "",
-                        Demographic: "",
+                        SelectedEntries: entryIdStr,
+                        EntryID: entryIdStr,
                         Comments: "",
-                        LinkRelationship: "",
-                        WorkflowID: "0"
-                    },
-                    handler: {
-                        _error: {
-                            _autoFix: false,
-                            _autoIgnore: false
-                        }
-                    }
-                };
-                endpoint = ["CampusLife", "IncidentEntry", "New"];
+                        AddAnother: false
+                    }]
+                });
+
+                call = new MVC.Wizard.ExecuteWizard(
+                    "StarNet.StarRez.Web.Main.Code.Functions.Providers.IncidentFunctions.AddMultipleParticipants",
+                    parseInt(screenInfo.id, 10),
+                    { _error: { _autoFix: false, _autoIgnore: false } },
+                    formData,
+                    true,
+                    0,
+                    new Date()
+                );
             } else if (screenInfo.type === 'program') {
-                // Program data structure
-                data = {
+                // Program still uses the direct ServerRequest approach
+                var data = {
                     parentID: parseInt(screenInfo.id, 10),
                     vm: {
                         __ChangedFields: ["EntryID", "Status", "CheckInDate", "CheckOutDate", "WorkflowID"],
-                        EntryID: entryId.toString(),
+                        EntryID: entryIdStr,
                         Status: "0",
                         CheckInDate: "",
                         CheckOutDate: "",
@@ -2656,22 +2655,12 @@
                         }
                     }
                 };
-                endpoint = ["CampusLife", "ProgramEntry", "New"];
+                call = new starrez.ServerRequest("CampusLife", "ProgramEntry", "New", data);
             }
-
-            // Show loading state on the search input
-            if (searchInput) {
-                searchInput.disabled = true;
-                searchInput.placeholder = screenInfo.type === 'incident' ? 'Adding participant...' : 'Adding attendee...';
-                searchInput.style.opacity = '0.6';
-            }
-
-            // Use StarRez's ServerRequest API to add the participant
-            const call = new starrez.ServerRequest(endpoint[0], endpoint[1], endpoint[2], data);
 
             call.Request({
                 ShowLoading: true
-            }).done(response => {
+            }).done(function(response) {
                 console.log(`[QuickAddParticipants] Successfully added participant: ${displayName} to ${screenInfo.type}`);
 
                 // Refresh the current section to show the new participant
