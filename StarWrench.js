@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.10.0
+// @version      1.10.1
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.10.0';
+    const SUITE_VERSION = '1.10.1';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2433,47 +2433,73 @@
             });
         }
 
-        // Add quick access hint between breadcrumb and search bar
-        function addSearchHint() {
+        // Add quick access hint between breadcrumb and search bar.
+        // If the search bar isn't available (limited-access users), insert a
+        // search button before the header buttons bar instead.
+        function addSearchHint(instantSearch) {
             const originalSearch = document.querySelector('habitat-search-input#header-global-search');
-            if (!originalSearch) {
-                console.log('[QuickAccess] Original search input not found');
-                return false;
-            }
 
-            // Check if hint already exists
+            // Check if hint/button already exists
             if (document.getElementById('starwrench-search-hint')) {
                 return true;
             }
 
-            // Create hint text with kbd element
-            const hintContainer = document.createElement('span');
-            hintContainer.id = 'starwrench-search-hint';
+            if (originalSearch) {
+                // Full-access path: insert hint text next to the native search bar
+                const hintContainer = document.createElement('span');
+                hintContainer.id = 'starwrench-search-hint';
 
-            // Create kbd element for the slash
-            const kbdElement = document.createElement('kbd');
-            kbdElement.textContent = '/';
-            kbdElement.style.cssText = `
-                background: var(--color-grey-g20, #f0f0f0);
-                border: 1px solid var(--color-grey-g30, #ccc);
-                border-radius: 3px;
-                padding: 2px 6px;
-                font-size: 11px;
-                font-family: monospace;
+                const kbdElement = document.createElement('kbd');
+                kbdElement.textContent = '/';
+                kbdElement.style.cssText = `
+                    background: var(--color-grey-g20, #f0f0f0);
+                    border: 1px solid var(--color-grey-g30, #ccc);
+                    border-radius: 3px;
+                    padding: 2px 6px;
+                    font-size: 11px;
+                    font-family: monospace;
+                    color: var(--color-grey-g60, #666);
+                    line-height: 1;
+                    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                    margin-right: 4px;
+                `;
+
+                hintContainer.appendChild(document.createTextNode('type '));
+                hintContainer.appendChild(kbdElement);
+                hintContainer.appendChild(document.createTextNode('for quick access'));
+                originalSearch.parentNode.insertBefore(hintContainer, originalSearch);
+                return true;
+            }
+
+            // Limited-access path: no native search bar, so add a search button
+            const buttonsBar = document.querySelector('.habitat-siteheading-buttons');
+            if (!buttonsBar) {
+                return false;
+            }
+
+            const btn = document.createElement('button');
+            btn.id = 'starwrench-search-hint';
+            btn.title = 'Quick search (/)';
+            btn.setAttribute('aria-label', 'Quick search');
+            btn.style.cssText = `
+                background: none;
+                border: none;
+                cursor: pointer;
+                padding: 0 8px;
+                height: 100%;
+                display: flex;
+                align-items: center;
                 color: var(--color-grey-g60, #666);
-                line-height: 1;
-                box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-                margin-right: 4px;
+                font-size: 16px;
+                opacity: 0.75;
+                transition: opacity 0.15s;
             `;
+            btn.innerHTML = '<i class="fa fa-magnifying-glass" aria-hidden="true"></i>';
+            btn.addEventListener('mouseover', function() { btn.style.opacity = '1'; });
+            btn.addEventListener('mouseout', function() { btn.style.opacity = '0.75'; });
+            btn.addEventListener('click', function() { instantSearch.openModal(); });
 
-            // Assemble hint: "type / for quick access"
-            hintContainer.appendChild(document.createTextNode('type '));
-            hintContainer.appendChild(kbdElement);
-            hintContainer.appendChild(document.createTextNode('for quick access'));
-
-            // Insert hint BEFORE the search input (between breadcrumb and search)
-            originalSearch.parentNode.insertBefore(hintContainer, originalSearch);
-
+            buttonsBar.parentNode.insertBefore(btn, buttonsBar);
             return true;
         }
 
@@ -2513,12 +2539,11 @@
                 }
             });
 
-            // Add hint much faster to prevent layout jank
+            // Add hint/button — retry once if the header isn't rendered yet
             setTimeout(() => {
-                const success = addSearchHint();
+                const success = addSearchHint(instantSearch);
                 if (!success) {
-                    // Retry after a shorter delay
-                    setTimeout(() => addSearchHint(), 500);
+                    setTimeout(() => addSearchHint(instantSearch), 500);
                 }
             }, 100);
         }
