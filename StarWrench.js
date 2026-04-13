@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.10.1
+// @version      1.10.2
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.10.1';
+    const SUITE_VERSION = '1.10.2';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2516,14 +2516,22 @@
                 if (e.key === '/') {
                     const quickAccessInput = document.getElementById('starwrench-instant-search-input');
 
-                    // If focused on a non-quick-access input/textarea, ignore
-                    if (['INPUT', 'TEXTAREA'].includes(e.target.tagName) && e.target !== quickAccessInput) {
-                        return; // Let the "/" be typed normally
+                    // Walk shadow DOM to find the real focused element
+                    let activeEl = document.activeElement;
+                    while (activeEl && activeEl.shadowRoot && activeEl.shadowRoot.activeElement) {
+                        activeEl = activeEl.shadowRoot.activeElement;
                     }
 
                     // If focused on quick access input with text already, ignore
-                    if (e.target === quickAccessInput && e.target.value.length > 0) {
+                    if (activeEl === quickAccessInput && activeEl.value.length > 0) {
                         return; // Let the "/" be typed normally
+                    }
+
+                    // Only allow triggering from the habitat search container input; block all other inputs/textareas
+                    if (['INPUT', 'TEXTAREA'].includes(activeEl.tagName)) {
+                        if (!activeEl.closest('.habitat-search-container')) {
+                            return; // Let the "/" be typed normally
+                        }
                     }
 
                     // Otherwise, toggle the modal
