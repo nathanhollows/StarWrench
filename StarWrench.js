@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.10.2
+// @version      1.11.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.10.2';
+    const SUITE_VERSION = '1.11.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -94,6 +94,11 @@
                 enabled: true,
                 name: '📐 Layout Fixes',
                 description: 'Fixes common layout issues: constrains read-more text areas and bulk-edit field widths'
+            },
+            atMentionLinker: {
+                enabled: true,
+                name: '🧑 @Mention Linker',
+                description: 'Converts @###### mentions in notes and paragraphs into clickable links to the resident\'s entry'
             }
         }
     };
@@ -1034,6 +1039,10 @@
             const sortedInitials = Object.keys(nameMap).sort((a, b) => b.length - a.length);
 
             for (const initials of sortedInitials) {
+                // Skip initials containing non-letter characters (e.g. "[preferred]" name parts)
+                // to avoid generating invalid regex patterns
+                if (!/^[A-Za-z]+$/.test(initials)) continue;
+
                 const fullName = nameMap[initials];
 
                 // Build regex pattern that allows optional dots between letters and trailing dot
@@ -1421,6 +1430,455 @@
             setTimeout(processIncidentLinksInPage, 600);
         });
         observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    // AT-MENTION LINKER PLUGIN
+    function initAtMentionLinkerPlugin() {
+        let linkingInProgress = false;
+
+        // Inline styles used because links live inside shadow roots where injected <style> won't reach
+        const LINK_STYLE = [
+            'color: #0077cc',
+            'text-decoration: underline',
+            'cursor: pointer',
+            'background: rgba(0, 119, 204, 0.1)',
+            'padding: 1px 3px',
+            'border-radius: 3px',
+            'transition: background 0.2s ease',
+        ].join('; ');
+
+        const LINK_STYLE_HOVER = [
+            'color: #0077cc',
+            'text-decoration: none',
+            'cursor: pointer',
+            'background: rgba(0, 119, 204, 0.2)',
+            'padding: 1px 3px',
+            'border-radius: 3px',
+        ].join('; ');
+
+        function createEntryLink(entryId) {
+            const link = document.createElement('span');
+            link.setAttribute('style', LINK_STYLE);
+            link.setAttribute('data-sw-at-link', 'true');
+            link.setAttribute('data-sw-autolink-id', entryId);
+
+            let displayText = '@' + entryId;
+            if (typeof window.starWrenchResidentDB !== 'undefined') {
+                const resident = window.starWrenchResidentDB.getById(entryId);
+                if (resident) {
+                    const firstName = resident.namePreferred || resident.nameFirst || '';
+                    displayText = (firstName + ' ' + (resident.nameLast || '')).trim();
+                }
+            }
+
+            link.textContent = displayText;
+            link.title = 'Open entry ' + entryId;
+            link.addEventListener('mouseenter', () => link.setAttribute('style', LINK_STYLE_HOVER));
+            link.addEventListener('mouseleave', () => link.setAttribute('style', LINK_STYLE));
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (typeof starrez !== 'undefined' && starrez.sm) {
+                    starrez.sm.NavigateTo('#!Entry:' + entryId);
+                }
+            });
+            return link;
+        }
+
+        function isInInput(node) {
+            let parent = node.parentNode;
+            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
+                const tag = parent.tagName.toLowerCase();
+                if (tag === 'input' || tag === 'select' || tag === 'textarea') return true;
+                parent = parent.parentNode;
+            }
+            return false;
+        }
+
+        function alreadyProcessed(node) {
+            let parent = node.parentNode;
+            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
+                if (parent.getAttribute && parent.getAttribute('data-sw-at-link') === 'true') return true;
+                parent = parent.parentNode;
+            }
+            return false;
+        }
+
+        function linkifyTextNode(textNode) {
+            if (isInInput(textNode) || alreadyProcessed(textNode)) return false;
+
+            const text = textNode.textContent;
+            const atRegex = /@(\d{5})\b/g;
+
+            if (!atRegex.test(text)) return false;
+            atRegex.lastIndex = 0;
+
+            let lastIndex = 0;
+            let modified = false;
+            const fragment = document.createDocumentFragment();
+            let match;
+
+            while ((match = atRegex.exec(text)) !== null) {
+                const matchStart = match.index;
+                const matchEnd = matchStart + match[0].length;
+                const entryId = match[1];
+
+                if (matchStart > lastIndex) {
+                    fragment.appendChild(document.createTextNode(text.slice(lastIndex, matchStart)));
+                }
+
+                fragment.appendChild(createEntryLink(entryId));
+                lastIndex = matchEnd;
+                modified = true;
+            }
+
+            if (lastIndex < text.length) {
+                fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+            }
+
+            if (modified && textNode.parentNode) {
+                textNode.parentNode.replaceChild(fragment, textNode);
+            }
+
+            return modified;
+        }
+
+        function processRoot(root) {
+            const walker = document.createTreeWalker(
+                root,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode: function(node) {
+                        if (!node.textContent.trim() || isInInput(node) || alreadyProcessed(node)) {
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                        if (/@\d{5}\b/.test(node.textContent)) {
+                            return NodeFilter.FILTER_ACCEPT;
+                        }
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                }
+            );
+
+            const nodes = [];
+            let node;
+            while ((node = walker.nextNode())) nodes.push(node);
+            nodes.forEach(function(n) { if (n.parentNode) linkifyTextNode(n); });
+        }
+
+        function processAllTargets() {
+            if (linkingInProgress) return;
+            linkingInProgress = true;
+            try {
+                // Shadow-root paragraphs (habitat-display custom elements)
+                document.querySelectorAll('habitat-display[role="paragraph"]').forEach(function(el) {
+                    if (el.shadowRoot) {
+                        processRoot(el.shadowRoot);
+                    }
+                    // Also process light DOM — on some pages (e.g. duty rounds) the text is
+                    // a direct child of the custom element rather than rendered inside the shadow root
+                    processRoot(el);
+                });
+                // Plain-DOM textareas (span.textarea used in incident/shift reports)
+                document.querySelectorAll('span.textarea').forEach(function(el) {
+                    processRoot(el);
+                });
+            } catch (e) {
+                console.error('[AtMentionLinker] Error:', e);
+            }
+            linkingInProgress = false;
+        }
+
+        // Observe a shadow root so content changes inside it trigger a rescan
+        const observedShadowRoots = new WeakSet();
+        function observeShadowRoot(shadowRoot) {
+            if (observedShadowRoots.has(shadowRoot)) return;
+            observedShadowRoots.add(shadowRoot);
+            const shadowObserver = new MutationObserver(function() {
+                setTimeout(processAllTargets, 600);
+            });
+            shadowObserver.observe(shadowRoot, { childList: true, subtree: true, characterData: true });
+        }
+
+        function attachShadowObservers() {
+            document.querySelectorAll('habitat-display[role="paragraph"]').forEach(function(el) {
+                if (el.shadowRoot) {
+                    observeShadowRoot(el.shadowRoot);
+                }
+            });
+        }
+
+        // URL tracking: detect SPA navigation (hash changes) and rescan
+        let lastUrl = window.location.href;
+        function checkUrlChange() {
+            const currentUrl = window.location.href;
+            if (currentUrl !== lastUrl) {
+                lastUrl = currentUrl;
+                // Content loads asynchronously after navigation; scan at 1s and 2.5s
+                setTimeout(processAllTargets, 1000);
+                setTimeout(processAllTargets, 2500);
+                setTimeout(attachShadowObservers, 2500);
+            }
+        }
+        setInterval(checkUrlChange, 500);
+
+        setTimeout(processAllTargets, 1500);
+        setInterval(processAllTargets, 4000);
+
+        // Regular DOM observer: catches new span.textarea elements and new habitat-display elements
+        const observer = new MutationObserver(function() {
+            attachShadowObservers();
+            setTimeout(processAllTargets, 600);
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        attachShadowObservers();
+
+        // ── AT-MENTION AUTOCOMPLETE ───────────────────────────────────────────
+        // Shows a resident picker popup when the user types @ in any textarea,
+        // including those inside shadow roots (e.g. habitat-textarea).
+
+        var acPopup = null;
+        var acField = null;   // textarea currently being monitored
+        var acAtPos = -1;     // index of the triggering @ character
+        var acResults = [];
+        var acIndex = 0;
+
+        function acGetPopup() {
+            if (acPopup) return acPopup;
+            acPopup = document.createElement('div');
+            acPopup.setAttribute('style', [
+                'position:fixed',
+                'z-index:999999',
+                'background:#fff',
+                'border:1px solid #d1d5db',
+                'border-radius:8px',
+                'box-shadow:0 6px 16px rgba(0,0,0,0.14)',
+                'min-width:240px',
+                'max-width:360px',
+                'max-height:256px',
+                'overflow-y:auto',
+                'display:none',
+                'font-size:13px',
+                'line-height:1.4',
+            ].join(';'));
+            document.body.appendChild(acPopup);
+            return acPopup;
+        }
+
+        function acHide() {
+            if (acPopup) acPopup.style.display = 'none';
+            acField = null;
+            acAtPos = -1;
+            acResults = [];
+            acIndex = 0;
+        }
+
+        function acPosition(field) {
+            var p = acGetPopup();
+            var r = field.getBoundingClientRect();
+            var spaceBelow = window.innerHeight - r.bottom;
+            // Horizontal: align to field left, but keep on screen
+            p.style.left = Math.min(r.left, window.innerWidth - 264) + 'px';
+            if (spaceBelow >= 180 || spaceBelow >= r.top) {
+                p.style.top = (r.bottom + 3) + 'px';
+                p.style.transform = '';
+            } else {
+                p.style.top = (r.top - 3) + 'px';
+                p.style.transform = 'translateY(-100%)';
+            }
+        }
+
+        function acRender() {
+            var p = acGetPopup();
+            p.innerHTML = '';
+            if (acResults.length === 0) {
+                acHide();
+                return;
+            }
+            acResults.forEach(function(resident, i) {
+                var item = document.createElement('div');
+                var selected = i === acIndex;
+                item.setAttribute('style', [
+                    'padding:6px 10px',
+                    'cursor:pointer',
+                    'display:flex',
+                    'justify-content:space-between',
+                    'align-items:baseline',
+                    'gap:10px',
+                    selected ? 'background:#eff6ff' : '',
+                    i < acResults.length - 1 ? 'border-bottom:1px solid #f3f4f6' : '',
+                ].filter(Boolean).join(';'));
+                item.dataset.swAcIdx = i;
+
+                var firstName = resident.namePreferred || resident.nameFirst || '';
+                var nameSpan = document.createElement('span');
+                nameSpan.textContent = (firstName + ' ' + (resident.nameLast || '')).trim();
+
+                var metaSpan = document.createElement('span');
+                metaSpan.textContent = (resident.roomSpace ? resident.roomSpace + ' · ' : '') + resident.entryId;
+                metaSpan.setAttribute('style', 'color:#9ca3af;font-size:11px;white-space:nowrap;flex-shrink:0');
+
+                item.appendChild(nameSpan);
+                item.appendChild(metaSpan);
+
+                // mousedown with preventDefault keeps focus on the textarea
+                item.addEventListener('mousedown', function(e) {
+                    e.preventDefault();
+                    acInsert(resident.entryId);
+                });
+                item.addEventListener('mouseover', function() {
+                    acIndex = i;
+                    acRender();
+                });
+                p.appendChild(item);
+            });
+            p.style.display = 'block';
+        }
+
+        function acQuery(query) {
+            if (typeof window.starWrenchResidentDB === 'undefined') {
+                acResults = [];
+                acRender();
+                return;
+            }
+            var matches;
+            if (query === '') {
+                matches = window.starWrenchResidentDB.getAll(true);
+            } else {
+                matches = window.starWrenchResidentDB.search(query, true);
+            }
+            acResults = matches.filter(function(r) {
+                return r.status === 'In Room';
+            }).slice(0, 8);
+            acIndex = 0;
+            acRender();
+        }
+
+        function acInsert(entryId) {
+            if (!acField || acAtPos < 0) return;
+            var field = acField;
+            var cursor = field.selectionStart;
+            var before = field.value.substring(0, acAtPos);
+            var after = field.value.substring(cursor);
+            var insertion = '@' + entryId + ' ';
+            field.value = before + insertion + after;
+            var newPos = before.length + insertion.length;
+            field.setSelectionRange(newPos, newPos);
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+            acHide();
+            field.focus();
+        }
+
+        function acHandleInput(e) {
+            var field = e.target;
+            if (!field || field.tagName !== 'TEXTAREA') return;
+            var cursor = field.selectionStart;
+            var textBefore = field.value.substring(0, cursor);
+            // Match @ followed by up to two words (first + optional last name) right before cursor.
+            // A second space dismisses the popup.
+            // [^\s@] excludes both whitespace and @ so a new @ always starts a fresh trigger
+            var match = textBefore.match(/@([^\s@]*(?:\s[^\s@]*)?)$/);
+            if (!match) {
+                acHide();
+                return;
+            }
+            acField = field;
+            acAtPos = match.index;
+            acPosition(field);
+            acQuery(match[1]);
+        }
+
+        function acHandleKeydown(e) {
+            if (!acPopup || acPopup.style.display === 'none') return;
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                acIndex = Math.min(acIndex + 1, acResults.length - 1);
+                acRender();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                acIndex = Math.max(acIndex - 1, 0);
+                acRender();
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                if (acResults.length > 0) {
+                    e.preventDefault();
+                    acInsert(acResults[acIndex].entryId);
+                }
+            } else if (e.key === 'Escape') {
+                acHide();
+            }
+        }
+
+        function acAttach(textarea) {
+            if (textarea._swAcAttached) return;
+            textarea._swAcAttached = true;
+            textarea.addEventListener('input', acHandleInput);
+            textarea.addEventListener('keydown', acHandleKeydown);
+            textarea.addEventListener('blur', function() {
+                // Delay allows mousedown on popup item to fire first
+                setTimeout(acHide, 160);
+            });
+        }
+
+        function acAttachToRoot(root) {
+            root.querySelectorAll('textarea').forEach(acAttach);
+        }
+
+        // For habitat-textarea (shadow root contains the actual <textarea>)
+        var acObservedShadows = new WeakSet();
+        function acAttachToHabitatTextarea(el) {
+            if (!el.shadowRoot || acObservedShadows.has(el)) return;
+            acObservedShadows.add(el);
+            acAttachToRoot(el.shadowRoot);
+            var shadowObs = new MutationObserver(function() {
+                acAttachToRoot(el.shadowRoot);
+            });
+            shadowObs.observe(el.shadowRoot, { childList: true, subtree: true });
+        }
+
+        function acScan() {
+            acAttachToRoot(document);
+            document.querySelectorAll('habitat-textarea').forEach(acAttachToHabitatTextarea);
+        }
+
+        // Dismiss when clicking outside the popup
+        document.addEventListener('mousedown', function(e) {
+            if (acPopup && acPopup.style.display !== 'none' && !acPopup.contains(e.target)) {
+                acHide();
+            }
+        });
+
+        // Catch newly added textareas/habitat-textareas
+        var acBodyObserver = new MutationObserver(function(mutations) {
+            mutations.forEach(function(mutation) {
+                mutation.addedNodes.forEach(function(node) {
+                    if (node.nodeType !== Node.ELEMENT_NODE) return;
+                    if (node.tagName === 'TEXTAREA') {
+                        acAttach(node);
+                    } else if (node.tagName === 'HABITAT-TEXTAREA') {
+                        acAttachToHabitatTextarea(node);
+                    } else {
+                        node.querySelectorAll('textarea').forEach(acAttach);
+                        node.querySelectorAll('habitat-textarea').forEach(acAttachToHabitatTextarea);
+                    }
+                });
+            });
+        });
+        acBodyObserver.observe(document.body, { childList: true, subtree: true });
+
+        setTimeout(acScan, 600);
+        // Re-scan after SPA navigation (reuse the existing URL-change interval above)
+        var acLastUrl = window.location.href;
+        setInterval(function() {
+            var url = window.location.href;
+            if (url !== acLastUrl) {
+                acLastUrl = url;
+                setTimeout(acScan, 1200);
+                setTimeout(acScan, 2800);
+            }
+        }, 500);
+        // ─────────────────────────────────────────────────────────────────────
     }
 
     // WORD HIGHLIGHTER PLUGIN
@@ -2262,7 +2720,7 @@
 
             // Handle keyboard navigation
             function handleKeyDown(e) {
-                if (e.key === 'Escape') {
+                if (e.key === 'Escape' || (e.key === '/' && searchInput.value === '')) {
                     e.preventDefault();
                     closeModal();
                     return;
@@ -2582,8 +3040,12 @@
         // Get current screen ID and type from StarRez API
         function getCurrentScreenInfo() {
             try {
-                // First check the URL hash to see if we're even on a relevant page
                 const hash = window.location.hash;
+
+                if (hash && hash.includes('dutyrounds:')) {
+                    const match = hash.match(/dutyrounds:(\d+)/);
+                    return match ? { id: match[1], type: 'dutyrounds' } : null;
+                }
 
                 let pageType = null;
                 if (hash && hash.includes('incident:')) {
@@ -2594,7 +3056,6 @@
                     return null;
                 }
 
-                // Only call GetCurrentlyDisplayedScreenID if we're on a relevant page
                 if (typeof starrez === 'undefined' || typeof starrez.sm === 'undefined' || typeof starrez.sm.GetCurrentlyDisplayedScreenID !== 'function') {
                     return null;
                 }
@@ -2633,14 +3094,24 @@
             // Show loading state on the search input
             if (searchInput) {
                 searchInput.disabled = true;
-                searchInput.placeholder = screenInfo.type === 'incident' ? 'Adding participant...' : 'Adding attendee...';
+                searchInput.placeholder = 'Adding participant...';
                 searchInput.style.opacity = '0.6';
             }
 
             var call;
             var entryIdStr = entryId.toString();
 
-            if (screenInfo.type === 'incident') {
+            if (screenInfo.type === 'dutyrounds') {
+                call = new starrez.ServerRequest("CampusLife", "DutyRoundsEntry", "New", {
+                    parentID: parseInt(screenInfo.id, 10),
+                    vm: {
+                        __ChangedFields: ["SelectedEntries", "EntryID"],
+                        SelectedEntries: entryIdStr,
+                        EntryID: entryIdStr
+                    },
+                    handler: { _error: { _autoFix: false, _autoIgnore: false } }
+                });
+            } else if (screenInfo.type === 'incident') {
                 // Use the AddMultipleParticipants wizard endpoint (broader permission support)
                 var formData = JSON.stringify({
                     IncidentInvolvementID: "0",
@@ -2740,13 +3211,141 @@
                     }
                 }
             }).always(() => {
-                // Restore search input state
                 if (searchInput) {
                     searchInput.disabled = false;
-                    searchInput.placeholder = screenInfo.type === 'incident' ? 'Add participant...' : 'Add attendee...';
+                    searchInput.placeholder = screenInfo.type === 'program' ? 'Add attendee...' : 'Add participant...';
                     searchInput.style.opacity = '1';
                 }
             });
+        }
+
+        // Collect all @-mentioned resident IDs from DOM and shadow roots
+        function collectAutoLinkIds() {
+            const ids = new Set();
+            function collectFromRoot(root) {
+                root.querySelectorAll('[data-sw-autolink-id]').forEach(function(el) {
+                    const id = el.getAttribute('data-sw-autolink-id');
+                    if (id) ids.add(id);
+                });
+            }
+            collectFromRoot(document);
+            document.querySelectorAll('habitat-display').forEach(function(el) {
+                if (el.shadowRoot) collectFromRoot(el.shadowRoot);
+            });
+            return Array.from(ids);
+        }
+
+        // Add all @-mentioned residents as participants in one request
+        function addLinkedParticipants(ids, button) {
+            const screenInfo = getCurrentScreenInfo();
+            if (!screenInfo) {
+                alert('Cannot determine page type.');
+                return;
+            }
+            if (!window.starrez || !window.starrez.ServerRequest) {
+                alert('StarRez API not available. Please refresh and try again.');
+                return;
+            }
+
+            button.disabled = true;
+            const idsStr = ids.join(',');
+            const lastId = ids[ids.length - 1];
+            let call;
+
+            if (screenInfo.type === 'dutyrounds') {
+                call = new starrez.ServerRequest("CampusLife", "DutyRoundsEntry", "New", {
+                    parentID: parseInt(screenInfo.id, 10),
+                    vm: {
+                        __ChangedFields: ["SelectedEntries", "EntryID"],
+                        SelectedEntries: idsStr,
+                        EntryID: lastId
+                    },
+                    handler: { _error: { _autoFix: false, _autoIgnore: false } }
+                });
+            } else if (screenInfo.type === 'incident') {
+                var formData = JSON.stringify({
+                    IncidentInvolvementID: "0",
+                    Reported: false,
+                    SelectedEntries: idsStr,
+                    EntryID: lastId,
+                    Comments: "",
+                    AddAnother: false,
+                    MultiStepData: [{
+                        __ChangedFields: ["IncidentInvolvementID", "Reported", "SelectedEntries", "EntryID", "Comments", "AddAnother"],
+                        IncidentInvolvementID: "0",
+                        Reported: false,
+                        SelectedEntries: idsStr,
+                        EntryID: lastId,
+                        Comments: "",
+                        AddAnother: false
+                    }]
+                });
+                call = new MVC.Wizard.ExecuteWizard(
+                    "StarNet.StarRez.Web.Main.Code.Functions.Providers.IncidentFunctions.AddMultipleParticipants",
+                    parseInt(screenInfo.id, 10),
+                    { _error: { _autoFix: false, _autoIgnore: false } },
+                    formData,
+                    true, 0, new Date()
+                );
+            } else {
+                button.disabled = false;
+                return;
+            }
+
+            call.Request({ ShowLoading: true }).done(function() {
+                console.log('[QuickAddParticipants] Linked participants added: ' + idsStr);
+                if (typeof toastr !== 'undefined') {
+                    toastr.success('', 'Added ' + ids.length + ' participant' + (ids.length === 1 ? '' : 's'));
+                }
+                if (typeof starrez.sm !== 'undefined' && starrez.sm.RefreshCurrentSection) {
+                    starrez.sm.RefreshCurrentSection();
+                }
+            }).fail(function(jqXHR, textStatus, errorThrown) {
+                console.error('[QuickAddParticipants] Error linking participants:', errorThrown);
+                if (typeof toastr !== 'undefined') {
+                    toastr.error('Please try again or add manually.', 'Failed to add participants');
+                } else {
+                    alert('Failed to add participants. Please try again or add manually.');
+                }
+            }).always(function() {
+                button.disabled = false;
+            });
+        }
+
+        function insertAutoLinkButton() {
+            if (document.querySelector('.starwrench-autolink-btn')) return true;
+            const editBtn = document.querySelector('habitat-fieldset > habitat-button[slot="button"]');
+            if (!editBtn) return false;
+
+            const button = document.createElement('habitat-button');
+            button.setAttribute('slot', 'button');
+            button.setAttribute('compact', '');
+            button.setAttribute('class', 'starwrench-autolink-btn');
+            button.setAttribute('title', 'Add all @-mentioned residents as participants');
+            button.textContent = 'Auto Link Participants';
+
+            button.addEventListener('click', function(e) {
+                e.stopPropagation();
+                const ids = collectAutoLinkIds();
+                if (ids.length === 0) {
+                    if (typeof toastr !== 'undefined') {
+                        toastr.info('', 'No @-mentioned residents found on this page.');
+                    } else {
+                        alert('No @-mentioned residents found on this page.');
+                    }
+                    return;
+                }
+                addLinkedParticipants(ids, button);
+            });
+
+            editBtn.parentElement.insertBefore(button, editBtn);
+            console.log('[QuickAddParticipants] Auto Link button added');
+            return true;
+        }
+
+        function removeAutoLinkButton() {
+            const btn = document.querySelector('.starwrench-autolink-btn');
+            if (btn) btn.remove();
         }
 
         // Create the results dropdown
@@ -3082,7 +3681,7 @@
             }
         }
 
-        // Monitor for page changes and try to insert search bar
+        // Monitor for page changes and try to insert search bar and auto-link button
         function monitorForSections() {
             try {
                 let lastUrl = window.location.href;
@@ -3091,27 +3690,29 @@
                     try {
                         const currentUrl = window.location.href;
 
-                        // Check if URL changed or if we're on a relevant page
-                        if (currentUrl !== lastUrl || currentUrl.includes('incident:') || (currentUrl.includes('program:') && currentUrl.includes(':attendees'))) {
+                        if (currentUrl !== lastUrl) {
                             lastUrl = currentUrl;
+                            removeAutoLinkButton();
+                        }
 
-                            // Try to insert after a delay to ensure DOM is ready
-                            setTimeout(() => {
-                                insertSearchBar();
-                            }, 1000);
+                        if (currentUrl.includes('incident:') || (currentUrl.includes('program:') && currentUrl.includes(':attendees'))) {
+                            setTimeout(() => { insertSearchBar(); }, 1000);
+                        }
+
+                        if (currentUrl.includes('dutyrounds:') || currentUrl.includes('incident:')) {
+                            insertAutoLinkButton();
                         }
                     } catch (error) {
                         console.error('[QuickAddParticipants] Error in checkAndInsert:', error);
                     }
                 }
 
-                // Check initially
+                // Initial insertion
+                setTimeout(insertAutoLinkButton, 1500);
                 checkAndInsert();
 
-                // Monitor for changes
                 setInterval(checkAndInsert, 2000);
 
-                // Also monitor DOM changes for dynamic content
                 const observer = new MutationObserver(() => {
                     setTimeout(checkAndInsert, 500);
                 });
@@ -3769,6 +4370,17 @@
 
     // LAYOUT FIXES PLUGIN
     function initLayoutFixesPlugin() {
+        if (typeof toastr !== 'undefined') {
+            Object.assign(toastr.options, {
+                closeButton: true,
+                progressBar: true,
+                showDuration: '100',
+                hideDuration: '100',
+                timeOut: '3000',
+                extendedTimeOut: '3000',
+            });
+        }
+
         const style = document.createElement('style');
         style.textContent = `
             .textarea[data-add-readmore="True"] {
@@ -3817,6 +4429,9 @@
             case 'autoLinker':
                 initAutoLinkerPlugin();
                 break;
+            case 'atMentionLinker':
+                initAtMentionLinkerPlugin();
+                break;
             case 'residentSearch':
                 initQuickAccessPlugin();
                 break;
@@ -3826,6 +4441,7 @@
             case 'quickIncidentStatus':
                 initQuickIncidentStatusPlugin();
                 break;
+
             case 'sharepointLinks':
                 initSharePointLinksPlugin();
                 break;
