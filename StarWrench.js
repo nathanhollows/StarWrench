@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.11.0
+// @version      1.12.1
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.11.0';
+    const SUITE_VERSION = '1.12.1';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1508,7 +1508,7 @@
             if (isInInput(textNode) || alreadyProcessed(textNode)) return false;
 
             const text = textNode.textContent;
-            const atRegex = /@(\d{5})\b/g;
+            const atRegex = /@(\d{4,5})\b/g;
 
             if (!atRegex.test(text)) return false;
             atRegex.lastIndex = 0;
@@ -1552,7 +1552,7 @@
                         if (!node.textContent.trim() || isInInput(node) || alreadyProcessed(node)) {
                             return NodeFilter.FILTER_REJECT;
                         }
-                        if (/@\d{5}\b/.test(node.textContent)) {
+                        if (/@\d{4,5}\b/.test(node.textContent)) {
                             return NodeFilter.FILTER_ACCEPT;
                         }
                         return NodeFilter.FILTER_REJECT;
@@ -3348,6 +3348,80 @@
             if (btn) btn.remove();
         }
 
+        // Parse existing participant names from the participants table.
+        // Format: "PAR: LastName, FirstName  (PreferredName) - [Status]"
+        function getExistingParticipants(container) {
+            const participants = [];
+            container.querySelectorAll('span.field.view-control[data-name="IncidentEntryID"]').forEach(function(span) {
+                const text = span.textContent.trim();
+                const withoutRole = text.replace(/^[A-Z]+:\s*/, '');
+                const lastName = withoutRole.split(',')[0].trim().toLowerCase();
+                const prefMatch = withoutRole.match(/\(([^)]+)\)/);
+                const preferred = prefMatch ? prefMatch[1].trim().toLowerCase() : '';
+                participants.push({ lastName, preferred });
+            });
+            return participants;
+        }
+
+        function isAlreadyParticipant(entryId, existing) {
+            if (!window.starWrenchResidentDB) return false;
+            const resident = window.starWrenchResidentDB.getById(entryId);
+            if (!resident) return false;
+            const resLast = (resident.nameLast || '').trim().toLowerCase();
+            const resPref = (resident.namePreferred || resident.nameFirst || '').trim().toLowerCase();
+            return existing.some(function(p) {
+                if (p.lastName !== resLast) return false;
+                if (p.preferred && resPref) return p.preferred === resPref;
+                return true;
+            });
+        }
+
+        function insertAutoAddButton() {
+            const wrapper = document.querySelector('.starwrench-quick-participants-search');
+            if (!wrapper || wrapper.querySelector('.starwrench-auto-add-btn')) return;
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'starwrench-auto-add-btn';
+            button.textContent = 'Auto Add';
+            button.title = 'Add all @-mentioned residents as participants, skipping existing ones';
+            button.style.cssText = `
+                margin-left: 6px;
+                height: 28px;
+                padding: 0 10px;
+                font-size: 13px;
+                background: var(--color-blue-b60, #0066cc);
+                color: white;
+                border: none;
+                border-radius: var(--control-border-radius, 4px);
+                cursor: pointer;
+                white-space: nowrap;
+            `;
+
+            button.addEventListener('click', function() {
+                const ids = collectAutoLinkIds();
+                if (ids.length === 0) {
+                    if (typeof toastr !== 'undefined') toastr.info('', 'No @-mentioned residents found on this page.');
+                    else alert('No @-mentioned residents found on this page.');
+                    return;
+                }
+
+                const container = wrapper.closest('.fieldset-block.ui-fieldset-block');
+                const existing = container ? getExistingParticipants(container) : [];
+                const newIds = ids.filter(function(id) { return !isAlreadyParticipant(id, existing); });
+
+                if (newIds.length === 0) {
+                    if (typeof toastr !== 'undefined') toastr.info('', 'All @-mentioned residents are already participants.');
+                    else alert('All @-mentioned residents are already participants.');
+                    return;
+                }
+
+                addLinkedParticipants(newIds, button);
+            });
+
+            wrapper.appendChild(button);
+        }
+
         // Create the results dropdown
         function createResultsContainer() {
             const container = document.createElement('div');
@@ -3696,11 +3770,15 @@
                         }
 
                         if (currentUrl.includes('incident:') || (currentUrl.includes('program:') && currentUrl.includes(':attendees'))) {
-                            setTimeout(() => { insertSearchBar(); }, 1000);
+                            setTimeout(() => { insertSearchBar(); insertAutoAddButton(); }, 1000);
                         }
 
                         if (currentUrl.includes('dutyrounds:') || currentUrl.includes('incident:')) {
                             insertAutoLinkButton();
+                        }
+
+                        if (currentUrl.includes('incident:')) {
+                            insertAutoAddButton();
                         }
                     } catch (error) {
                         console.error('[QuickAddParticipants] Error in checkAndInsert:', error);
