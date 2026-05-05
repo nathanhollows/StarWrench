@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.12.1
+// @version      1.13.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.12.1';
+    const SUITE_VERSION = '1.13.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -35,35 +35,20 @@
                 name: '🎯 Auto-Select',
                 description: 'Bulk select entries by pasting a list of IDs (works on Main -> Entries page)'
             },
-            clipboard: {
+            dashboardTweaks: {
                 enabled: true,
-                name: '📋 Dashboard Quick Copy',
-                description: 'Copy Entry IDs from dashboard sections to clipboard for easy export'
-            },
-            dashboard: {
-                enabled: true,
-                name: '🔍 Dashboard Search',
-                description: 'Add search functionality to the Dashboard dropdown menu'
+                name: '📊 Dashboard Tweaks',
+                description: 'Adds search to the dashboard dropdown menu and a button to copy Entry IDs to clipboard'
             },
             initials: {
                 enabled: true,
                 name: '👤 Expand Initials',
                 description: 'Expands initials in shift and incident reports for easy reading'
             },
-            phone: {
-                enabled: true,
-                name: '📱 Phone Formatter',
-                description: 'Automatically format phone numbers with proper spacing and grouping'
-            },
-            wordHighlighter: {
-                enabled: false,
-                name: '🖍️ Word Highlighter',
-                description: 'Colour codes your colour codes. Makes "Orange" and "Yellow" appear orange and yellow'
-            },
             autoLinker: {
                 enabled: true,
-                name: '🔗 Incident Auto Linker',
-                description: 'Automatically converts "incident ######" or "report ######" text into clickable links'
+                name: '🔗 Auto Linker',
+                description: 'Converts "incident ######", "report ######", and ###### references into links, and @##### mentions into resident links with autocomplete'
             },
             residentSearch: {
                 enabled: true,
@@ -94,11 +79,6 @@
                 enabled: true,
                 name: '📐 Layout Fixes',
                 description: 'Fixes common layout issues: constrains read-more text areas and bulk-edit field widths'
-            },
-            atMentionLinker: {
-                enabled: true,
-                name: '🧑 @Mention Linker',
-                description: 'Converts @###### mentions in notes and paragraphs into clickable links to the resident\'s entry'
             }
         }
     };
@@ -622,8 +602,8 @@
         observer.observe(document.querySelector('title') || document.head, { childList: true, characterData: true, subtree: true });
     }
 
-    // CLIPBOARD PLUGIN
-    function initClipboardPlugin() {
+    // DASHBOARD TWEAKS PLUGIN (quick copy + search)
+    function initDashboardTweaksPlugin() {
         function getEntryIdsFromDashboard(dashboardItem) {
             const links = dashboardItem.querySelectorAll('a[href*="#!Entry:"]');
             const entryIds = [];
@@ -820,10 +800,8 @@
                 setTimeout(processAllDashboardItems, 1000);
             }
         }, 2000);
-    }
 
-    // DASHBOARD SEARCH PLUGIN
-    function initDashboardPlugin() {
+        // ── DASHBOARD SEARCH ──────────────────────────────────────────────────
         const PROCESSED_ATTRIBUTE = 'data-search-filter-added';
 
         function addSearchToDropdown(dropdown) {
@@ -1161,282 +1139,9 @@
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
-    // PHONE FORMATTER PLUGIN
-    function initPhonePlugin() {
-        let formattingInProgress = false;
-
-        function formatPhoneNumber(phoneNumber) {
-            const cleaned = phoneNumber.replace(/[^\d+]/g, '');
-            if (cleaned.length < 7) return cleaned;
-
-            if (cleaned.startsWith('+64')) {
-                if (cleaned.length >= 5) {
-                    if (cleaned.charAt(3) === '2') {
-                        const remainingDigits = cleaned.slice(5);
-                        const prefix = cleaned.slice(3, 5);
-                        const firstGroup = remainingDigits.slice(0, 3);
-                        const secondGroup = remainingDigits.slice(3);
-                        return `+64 ${prefix} ${firstGroup} ${secondGroup}`;
-                    } else {
-                        const remainingDigits = cleaned.slice(4);
-                        const prefix = cleaned.charAt(3);
-                        const firstGroup = remainingDigits.slice(0, 3);
-                        const secondGroup = remainingDigits.slice(3);
-                        return `+64 ${prefix} ${firstGroup} ${secondGroup}`;
-                    }
-                }
-            }
-
-            if (cleaned.startsWith('02') && cleaned.length >= 9) {
-                const prefix = cleaned.slice(0, 3);
-                const remainingDigits = cleaned.slice(3);
-                const firstGroup = remainingDigits.slice(0, 3);
-                const secondGroup = remainingDigits.slice(3);
-                return `${prefix} ${firstGroup} ${secondGroup}`;
-            }
-
-            if (cleaned.startsWith('0') && cleaned.length >= 8) {
-                const prefix = cleaned.slice(0, 2);
-                const remainingDigits = cleaned.slice(2);
-                const firstGroup = remainingDigits.slice(0, 3);
-                const secondGroup = remainingDigits.slice(3);
-                return `${prefix} ${firstGroup} ${secondGroup}`;
-            }
-
-            if (cleaned.length <= 7) {
-                return cleaned.slice(0, 3) + ' ' + cleaned.slice(3);
-            } else {
-                return cleaned.slice(0, 3) + ' ' + cleaned.slice(3, 6) + ' ' + cleaned.slice(6);
-            }
-        }
-
-        function formatPhoneNumbersInPage() {
-            if (formattingInProgress) return;
-            formattingInProgress = true;
-
-            try {
-                // Format in personal info tiles
-                document.querySelectorAll('ul[class*="personal-info-tile-styles"] li, li').forEach(item => {
-                    const paragraphs = item.querySelectorAll('p');
-                    if (paragraphs.length >= 2) {
-                        const labelElement = paragraphs[0];
-                        const valueElement = paragraphs[1];
-
-                        if (labelElement?.textContent?.includes('Phone Number') && valueElement?.textContent) {
-                            const originalNumber = valueElement.textContent.trim();
-                            if (originalNumber && /^\+?[0-9]{7,15}$/.test(originalNumber.replace(/\s/g, ''))) {
-                                const spaceCount = (originalNumber.match(/ /g) || []).length;
-                                if (spaceCount < 2) {
-                                    const formattedNumber = formatPhoneNumber(originalNumber);
-                                    if (formattedNumber !== originalNumber) {
-                                        valueElement.textContent = formattedNumber;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-
-                // Format in search results
-                document.querySelectorAll('span[data-name="Phone"]').forEach(span => {
-                    if (span?.textContent) {
-                        const originalNumber = span.textContent.trim();
-                        if (originalNumber && /^\+?[0-9]{7,15}$/.test(originalNumber.replace(/\s/g, ''))) {
-                            const spaceCount = (originalNumber.match(/ /g) || []).length;
-                            if (spaceCount < 2) {
-                                const formattedNumber = formatPhoneNumber(originalNumber);
-                                if (formattedNumber !== originalNumber) {
-                                    span.textContent = formattedNumber;
-                                }
-                            }
-                        }
-                    }
-                });
-            } catch (error) {
-                console.error('Error in phone formatter:', error);
-            }
-
-            formattingInProgress = false;
-        }
-
-        setTimeout(formatPhoneNumbersInPage, 1500);
-        setInterval(formatPhoneNumbersInPage, 3000);
-
-        const observer = new MutationObserver(() => {
-            setTimeout(formatPhoneNumbersInPage, 500);
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-    }
-
     // AUTO LINKER PLUGIN
     function initAutoLinkerPlugin() {
-        let linkingInProgress = false;
-
-        const styles = document.createElement('style');
-        styles.textContent = `
-            .auto-incident-link {
-                color: #0077cc !important;
-                text-decoration: underline !important;
-                cursor: pointer !important;
-                background: rgba(0, 119, 204, 0.1) !important;
-                padding: 1px 3px !important;
-                border-radius: 3px !important;
-                transition: background 0.2s ease !important;
-            }
-            .auto-incident-link:hover {
-                background: rgba(0, 119, 204, 0.2) !important;
-                text-decoration: none !important;
-            }
-        `;
-        document.head.appendChild(styles);
-
-        function isInInputOrSelect(node) {
-            let parent = node.parentNode;
-            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
-                const tagName = parent.tagName.toLowerCase();
-                if (tagName === 'input' || tagName === 'select' || tagName === 'textarea') {
-                    return true;
-                }
-                parent = parent.parentNode;
-            }
-            return false;
-        }
-
-        function alreadyHasLinks(element) {
-            if (element.querySelector && element.querySelector('.auto-incident-link')) {
-                return true;
-            }
-            let parent = element.parentNode;
-            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
-                if (parent.classList && parent.classList.contains('auto-incident-link')) {
-                    return true;
-                }
-                parent = parent.parentNode;
-            }
-            return false;
-        }
-
-        function createIncidentLink(incidentNumber) {
-            const link = document.createElement('span');
-            link.className = 'auto-incident-link';
-            link.title = `Open incident ${incidentNumber}`;
-            link.onclick = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                // Navigate using StarRez shortcode system
-                starrez.sm.NavigateTo(`#!incident:${incidentNumber}:quick%20information`);
-            };
-            return link;
-        }
-
-        function linkifyIncidentReferences(textNode) {
-            if (isInInputOrSelect(textNode) || alreadyHasLinks(textNode)) {
-                return false;
-            }
-
-            const text = textNode.textContent;
-            // Match "incident ######" or "report ######" (both require exactly 6 digits, case insensitive)
-            const incidentRegex = /\b(incident|report)\s+(\d{6})\b/gi;
-
-            if (!incidentRegex.test(text)) {
-                return false;
-            }
-
-            // Reset regex for actual replacement
-            incidentRegex.lastIndex = 0;
-            let modified = false;
-            let lastIndex = 0;
-            const fragment = document.createDocumentFragment();
-            let match;
-
-            while ((match = incidentRegex.exec(text)) !== null) {
-                const matchStart = match.index;
-                const matchEnd = matchStart + match[0].length;
-                const incidentNumber = match[2];
-
-                // Add text before the match
-                if (matchStart > lastIndex) {
-                    const beforeText = document.createTextNode(text.slice(lastIndex, matchStart));
-                    fragment.appendChild(beforeText);
-                }
-
-                // Create the clickable link
-                const link = createIncidentLink(incidentNumber);
-                link.textContent = match[0]; // The full matched text
-                fragment.appendChild(link);
-
-                lastIndex = matchEnd;
-                modified = true;
-            }
-
-            // Add remaining text after the last match
-            if (lastIndex < text.length) {
-                const afterText = document.createTextNode(text.slice(lastIndex));
-                fragment.appendChild(afterText);
-            }
-
-            if (modified) {
-                const parent = textNode.parentNode;
-                parent.replaceChild(fragment, textNode);
-            }
-
-            return modified;
-        }
-
-        function processIncidentLinksInPage() {
-            if (linkingInProgress) return;
-            linkingInProgress = true;
-
-            try {
-                const walker = document.createTreeWalker(
-                    document.body,
-                    NodeFilter.SHOW_TEXT,
-                    {
-                        acceptNode: (node) => {
-                            if (!node.textContent.trim() || isInInputOrSelect(node) || alreadyHasLinks(node)) {
-                                return NodeFilter.FILTER_REJECT;
-                            }
-                            // Only process nodes that contain incident/report references
-                            if (/\b(incident|report)\s+\d+\b/i.test(node.textContent)) {
-                                return NodeFilter.FILTER_ACCEPT;
-                            }
-                            return NodeFilter.FILTER_REJECT;
-                        }
-                    }
-                );
-
-                const textNodes = [];
-                let node;
-                while (node = walker.nextNode()) {
-                    textNodes.push(node);
-                }
-
-                textNodes.forEach(textNode => {
-                    if (textNode.parentNode) {
-                        linkifyIncidentReferences(textNode);
-                    }
-                });
-            } catch (error) {
-                console.error('Error in auto linker:', error);
-            }
-
-            linkingInProgress = false;
-        }
-
-        setTimeout(processIncidentLinksInPage, 1500);
-        setInterval(processIncidentLinksInPage, 4000);
-
-        const observer = new MutationObserver(() => {
-            setTimeout(processIncidentLinksInPage, 600);
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-    }
-
-    // AT-MENTION LINKER PLUGIN
-    function initAtMentionLinkerPlugin() {
-        let linkingInProgress = false;
-
-        // Inline styles used because links live inside shadow roots where injected <style> won't reach
+        // Inline styles work in both light DOM and shadow roots
         const LINK_STYLE = [
             'color: #0077cc',
             'text-decoration: underline',
@@ -1456,6 +1161,89 @@
             'border-radius: 3px',
         ].join('; ');
 
+        // ── UTILITIES ─────────────────────────────────────────────────────────
+        function isInInput(node) {
+            let parent = node.parentNode;
+            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
+                const tag = parent.tagName.toLowerCase();
+                if (tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'habitat-textarea') return true;
+                parent = parent.parentNode;
+            }
+            return false;
+        }
+
+        function alreadyLinked(node) {
+            let parent = node.parentNode;
+            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
+                if (parent.getAttribute && (
+                    parent.getAttribute('data-sw-inc-link') === 'true' ||
+                    parent.getAttribute('data-sw-at-link') === 'true'
+                )) return true;
+                parent = parent.parentNode;
+            }
+            return false;
+        }
+
+        // ── INCIDENT LINKER ───────────────────────────────────────────────────
+        function createIncidentLink(incidentNumber, displayText) {
+            const link = document.createElement('span');
+            link.setAttribute('style', LINK_STYLE);
+            link.setAttribute('data-sw-inc-link', 'true');
+            link.textContent = displayText;
+            link.title = 'Open incident ' + incidentNumber;
+            link.addEventListener('mouseenter', function() { link.setAttribute('style', LINK_STYLE_HOVER); });
+            link.addEventListener('mouseleave', function() { link.setAttribute('style', LINK_STYLE); });
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (typeof starrez !== 'undefined' && starrez.sm) {
+                    starrez.sm.NavigateTo('#!incident:' + incidentNumber + ':quick%20information');
+                }
+            });
+            return link;
+        }
+
+        function linkifyIncidentReferences(textNode) {
+            if (isInInput(textNode) || alreadyLinked(textNode)) return false;
+
+            const text = textNode.textContent;
+            // "incident/report ######" (6-7 digits) or standalone ###### (6-7 digits, not preceded by word char)
+            const regex = /\b(incident|report)\s+(\d{6,7})\b|(?<!\w)#(\d{6,7})\b/gi;
+
+            if (!regex.test(text)) return false;
+            regex.lastIndex = 0;
+
+            let lastIndex = 0;
+            let modified = false;
+            const fragment = document.createDocumentFragment();
+            let match;
+
+            while ((match = regex.exec(text)) !== null) {
+                const matchStart = match.index;
+                const matchEnd = matchStart + match[0].length;
+                const incidentNumber = match[2] || match[3];
+
+                if (matchStart > lastIndex) {
+                    fragment.appendChild(document.createTextNode(text.slice(lastIndex, matchStart)));
+                }
+
+                fragment.appendChild(createIncidentLink(incidentNumber, match[0]));
+                lastIndex = matchEnd;
+                modified = true;
+            }
+
+            if (lastIndex < text.length) {
+                fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+            }
+
+            if (modified && textNode.parentNode) {
+                textNode.parentNode.replaceChild(fragment, textNode);
+            }
+
+            return modified;
+        }
+
+        // ── AT-MENTION LINKER ─────────────────────────────────────────────────
         function createEntryLink(entryId) {
             const link = document.createElement('span');
             link.setAttribute('style', LINK_STYLE);
@@ -1473,9 +1261,9 @@
 
             link.textContent = displayText;
             link.title = 'Open entry ' + entryId;
-            link.addEventListener('mouseenter', () => link.setAttribute('style', LINK_STYLE_HOVER));
-            link.addEventListener('mouseleave', () => link.setAttribute('style', LINK_STYLE));
-            link.addEventListener('click', (e) => {
+            link.addEventListener('mouseenter', function() { link.setAttribute('style', LINK_STYLE_HOVER); });
+            link.addEventListener('mouseleave', function() { link.setAttribute('style', LINK_STYLE); });
+            link.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
                 if (typeof starrez !== 'undefined' && starrez.sm) {
@@ -1485,27 +1273,8 @@
             return link;
         }
 
-        function isInInput(node) {
-            let parent = node.parentNode;
-            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
-                const tag = parent.tagName.toLowerCase();
-                if (tag === 'input' || tag === 'select' || tag === 'textarea') return true;
-                parent = parent.parentNode;
-            }
-            return false;
-        }
-
-        function alreadyProcessed(node) {
-            let parent = node.parentNode;
-            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
-                if (parent.getAttribute && parent.getAttribute('data-sw-at-link') === 'true') return true;
-                parent = parent.parentNode;
-            }
-            return false;
-        }
-
-        function linkifyTextNode(textNode) {
-            if (isInInput(textNode) || alreadyProcessed(textNode)) return false;
+        function linkifyAtMentions(textNode) {
+            if (isInInput(textNode) || alreadyLinked(textNode)) return false;
 
             const text = textNode.textContent;
             const atRegex = /@(\d{4,5})\b/g;
@@ -1521,13 +1290,12 @@
             while ((match = atRegex.exec(text)) !== null) {
                 const matchStart = match.index;
                 const matchEnd = matchStart + match[0].length;
-                const entryId = match[1];
 
                 if (matchStart > lastIndex) {
                     fragment.appendChild(document.createTextNode(text.slice(lastIndex, matchStart)));
                 }
 
-                fragment.appendChild(createEntryLink(entryId));
+                fragment.appendChild(createEntryLink(match[1]));
                 lastIndex = matchEnd;
                 modified = true;
             }
@@ -1543,48 +1311,56 @@
             return modified;
         }
 
-        function processRoot(root) {
-            const walker = document.createTreeWalker(
-                root,
-                NodeFilter.SHOW_TEXT,
-                {
-                    acceptNode: function(node) {
-                        if (!node.textContent.trim() || isInInput(node) || alreadyProcessed(node)) {
-                            return NodeFilter.FILTER_REJECT;
-                        }
-                        if (/@\d{4,5}\b/.test(node.textContent)) {
-                            return NodeFilter.FILTER_ACCEPT;
-                        }
-                        return NodeFilter.FILTER_REJECT;
-                    }
+        // ── COMBINED ROOT PROCESSOR ───────────────────────────────────────────
+        // doMentions must only be true for known read-only display containers.
+        // Never pass true for document.body — form textareas live there.
+        function processRoot(root, doMentions) {
+            // Incident/report/# references — safe to run anywhere
+            var incNodes = [];
+            var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+                acceptNode: function(node) {
+                    if (!node.textContent.trim() || isInInput(node) || alreadyLinked(node)) return NodeFilter.FILTER_REJECT;
+                    if (/\b(incident|report)\s+\d+\b/i.test(node.textContent) || /(?<!\w)#\d{6,7}/.test(node.textContent)) return NodeFilter.FILTER_ACCEPT;
+                    return NodeFilter.FILTER_REJECT;
                 }
-            );
+            });
+            var n;
+            while ((n = walker.nextNode())) incNodes.push(n);
+            incNodes.forEach(function(n) { if (n.parentNode) linkifyIncidentReferences(n); });
 
-            const nodes = [];
-            let node;
-            while ((node = walker.nextNode())) nodes.push(node);
-            nodes.forEach(function(n) { if (n.parentNode) linkifyTextNode(n); });
+            if (!doMentions) return;
+
+            // @mentions — restricted to read-only display areas only
+            var mentionNodes = [];
+            walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+                acceptNode: function(node) {
+                    if (!node.textContent.trim() || isInInput(node) || alreadyLinked(node)) return NodeFilter.FILTER_REJECT;
+                    if (/@\d{4,5}\b/.test(node.textContent)) return NodeFilter.FILTER_ACCEPT;
+                    return NodeFilter.FILTER_REJECT;
+                }
+            });
+            while ((n = walker.nextNode())) mentionNodes.push(n);
+            mentionNodes.forEach(function(n) { if (n.parentNode) linkifyAtMentions(n); });
         }
 
+        let linkingInProgress = false;
         function processAllTargets() {
             if (linkingInProgress) return;
             linkingInProgress = true;
             try {
-                // Shadow-root paragraphs (habitat-display custom elements)
+                // habitat-display paragraphs are read-only — run both linkers
                 document.querySelectorAll('habitat-display[role="paragraph"]').forEach(function(el) {
-                    if (el.shadowRoot) {
-                        processRoot(el.shadowRoot);
-                    }
-                    // Also process light DOM — on some pages (e.g. duty rounds) the text is
-                    // a direct child of the custom element rather than rendered inside the shadow root
-                    processRoot(el);
+                    if (el.shadowRoot) processRoot(el.shadowRoot, true);
+                    processRoot(el, true);
                 });
-                // Plain-DOM textareas (span.textarea used in incident/shift reports)
+                // span.textarea (incident/shift report display) — run both linkers
                 document.querySelectorAll('span.textarea').forEach(function(el) {
-                    processRoot(el);
+                    processRoot(el, true);
                 });
+                // Full light DOM: incidents only — @mentions here would corrupt editable form fields
+                processRoot(document.body, false);
             } catch (e) {
-                console.error('[AtMentionLinker] Error:', e);
+                console.error('[AutoLinker] Error:', e);
             }
             linkingInProgress = false;
         }
@@ -1722,9 +1498,13 @@
                 item.appendChild(nameSpan);
                 item.appendChild(metaSpan);
 
-                // mousedown with preventDefault keeps focus on the textarea
+                // mousedown with preventDefault keeps textarea focused; click is a fallback
+                // (if mousedown already inserted, acField is null and acInsert is a no-op)
                 item.addEventListener('mousedown', function(e) {
                     e.preventDefault();
+                    acInsert(resident.entryId);
+                });
+                item.addEventListener('click', function() {
                     acInsert(resident.entryId);
                 });
                 item.addEventListener('mouseover', function() {
@@ -1879,130 +1659,6 @@
             }
         }, 500);
         // ─────────────────────────────────────────────────────────────────────
-    }
-
-    // WORD HIGHLIGHTER PLUGIN
-    function initWordHighlighterPlugin() {
-        let highlightingInProgress = false;
-
-        const styles = document.createElement('style');
-        styles.textContent = `
-            mark.orange-highlight {
-                background: orange !important;
-                opacity: 0;
-                animation: fadeIn 0.5s ease-in forwards;
-            }
-            mark.yellow-highlight {
-                background: yellow !important;
-                opacity: 0;
-                animation: fadeIn 0.5s ease-in forwards;
-            }
-            @keyframes fadeIn {
-                from { opacity: 0; }
-                to { opacity: 1; }
-            }
-        `;
-        document.head.appendChild(styles);
-
-        function isInInputOrSelect(node) {
-            let parent = node.parentNode;
-            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
-                const tagName = parent.tagName.toLowerCase();
-                if (tagName === 'input' || tagName === 'select' || tagName === 'textarea') {
-                    return true;
-                }
-                parent = parent.parentNode;
-            }
-            return false;
-        }
-
-        function alreadyHasMarks(element) {
-            if (element.querySelector && element.querySelector('mark.orange-highlight, mark.yellow-highlight')) {
-                return true;
-            }
-            let parent = element.parentNode;
-            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
-                if (parent.tagName && parent.tagName.toLowerCase() === 'mark') {
-                    return true;
-                }
-                parent = parent.parentNode;
-            }
-            return false;
-        }
-
-        function wrapWordsWithMark(textNode) {
-            if (isInInputOrSelect(textNode) || alreadyHasMarks(textNode)) {
-                return false;
-            }
-
-            const text = textNode.textContent;
-            if (text.includes('Orange') || text.includes('Yellow')) {
-                const tempDiv = document.createElement('div');
-                let modifiedText = text;
-
-                modifiedText = modifiedText.replace(/Orange/g, '<mark class="orange-highlight">Orange</mark>');
-                modifiedText = modifiedText.replace(/Yellow/g, '<mark class="yellow-highlight">Yellow</mark>');
-
-                if (modifiedText !== text) {
-                    tempDiv.innerHTML = modifiedText;
-                    const parent = textNode.parentNode;
-                    const fragment = document.createDocumentFragment();
-                    while (tempDiv.firstChild) {
-                        fragment.appendChild(tempDiv.firstChild);
-                    }
-                    parent.replaceChild(fragment, textNode);
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        function highlightWordsInPage() {
-            if (highlightingInProgress) return;
-            highlightingInProgress = true;
-
-            try {
-                const walker = document.createTreeWalker(
-                    document.body,
-                    NodeFilter.SHOW_TEXT,
-                    {
-                        acceptNode: (node) => {
-                            if (!node.textContent.trim() || isInInputOrSelect(node) || alreadyHasMarks(node)) {
-                                return NodeFilter.FILTER_REJECT;
-                            }
-                            if (node.textContent.includes('Orange') || node.textContent.includes('Yellow')) {
-                                return NodeFilter.FILTER_ACCEPT;
-                            }
-                            return NodeFilter.FILTER_REJECT;
-                        }
-                    }
-                );
-
-                const textNodes = [];
-                let node;
-                while (node = walker.nextNode()) {
-                    textNodes.push(node);
-                }
-
-                textNodes.forEach(textNode => {
-                    if (textNode.parentNode) {
-                        wrapWordsWithMark(textNode);
-                    }
-                });
-            } catch (error) {
-                console.error('Error in word highlighter:', error);
-            }
-
-            highlightingInProgress = false;
-        }
-
-        setTimeout(highlightWordsInPage, 1500);
-        setInterval(highlightWordsInPage, 3000);
-
-        const observer = new MutationObserver(() => {
-            setTimeout(highlightWordsInPage, 500);
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
     }
 
     // RESIDENT DATABASE FROM CSV (Background Service)
@@ -4470,8 +4126,144 @@
                 width: min-content;
                 max-width: 230px;
             }
+            habitat-display[multiline][role="paragraph"] {
+                display: block;
+                max-width: 128ch;
+            }
+            .column.ui-dashboard-column {
+                display: flex;
+                flex-direction: column;
+            }
+            .dashboard-item:has(.panel-error) {
+                order: 99;
+            }
+            .dashboard-item:has(.panel-error) .item-title.ui-dashboard-item-title {
+                color: #676767;
+                background-color: #e3e3e3;
+            }
+            .dashboard-item-title-options {
+                transition: all 0.1s;
+                opacity: 0.3;
+            }
+            .dashboard-item.ui-dashboard-item:hover .dashboard-item-title-options {
+                opacity: 1;
+            }
         `;
         document.head.appendChild(style);
+
+        var expandedEls = new WeakSet();
+
+        function expandHabitatDisplay(el) {
+            if (expandedEls.has(el)) return;
+            var sr = el.shadowRoot;
+            if (!sr) return;
+            var linkBtn = sr.querySelector('habitat-link-button');
+            if (!linkBtn) return;
+            expandedEls.add(el);
+            var innerBtn = linkBtn.shadowRoot && linkBtn.shadowRoot.querySelector('button');
+            if (innerBtn) {
+                innerBtn.click();
+            } else {
+                linkBtn.click();
+            }
+        }
+
+        function processHabitatDisplays() {
+            document.querySelectorAll('habitat-display[multiline][role="paragraph"]').forEach(expandHabitatDisplay);
+        }
+
+        processHabitatDisplays();
+        setTimeout(processHabitatDisplays, 500);
+        setTimeout(processHabitatDisplays, 1500);
+
+        var layoutObserver = new MutationObserver(function() {
+            setTimeout(processHabitatDisplays, 200);
+        });
+        layoutObserver.observe(document.body, { childList: true, subtree: true });
+
+        // ── PHONE FORMATTER ───────────────────────────────────────────────────
+        var formattingInProgress = false;
+
+        function formatPhoneNumber(phoneNumber) {
+            const cleaned = phoneNumber.replace(/[^\d+]/g, '');
+            if (cleaned.length < 7) return cleaned;
+
+            if (cleaned.startsWith('+64')) {
+                if (cleaned.length >= 5) {
+                    if (cleaned.charAt(3) === '2') {
+                        const remainingDigits = cleaned.slice(5);
+                        const prefix = cleaned.slice(3, 5);
+                        const firstGroup = remainingDigits.slice(0, 3);
+                        const secondGroup = remainingDigits.slice(3);
+                        return '+64 ' + prefix + ' ' + firstGroup + ' ' + secondGroup;
+                    } else {
+                        const remainingDigits = cleaned.slice(4);
+                        const prefix = cleaned.charAt(3);
+                        const firstGroup = remainingDigits.slice(0, 3);
+                        const secondGroup = remainingDigits.slice(3);
+                        return '+64 ' + prefix + ' ' + firstGroup + ' ' + secondGroup;
+                    }
+                }
+            }
+
+            if (cleaned.startsWith('02') && cleaned.length >= 9) {
+                const prefix = cleaned.slice(0, 3);
+                const remainingDigits = cleaned.slice(3);
+                return prefix + ' ' + remainingDigits.slice(0, 3) + ' ' + remainingDigits.slice(3);
+            }
+
+            if (cleaned.startsWith('0') && cleaned.length >= 8) {
+                const prefix = cleaned.slice(0, 2);
+                const remainingDigits = cleaned.slice(2);
+                return prefix + ' ' + remainingDigits.slice(0, 3) + ' ' + remainingDigits.slice(3);
+            }
+
+            if (cleaned.length <= 7) {
+                return cleaned.slice(0, 3) + ' ' + cleaned.slice(3);
+            }
+            return cleaned.slice(0, 3) + ' ' + cleaned.slice(3, 6) + ' ' + cleaned.slice(6);
+        }
+
+        function formatPhoneNumbersInPage() {
+            if (formattingInProgress) return;
+            formattingInProgress = true;
+            try {
+                document.querySelectorAll('ul[class*="personal-info-tile-styles"] li, li').forEach(function(item) {
+                    const paragraphs = item.querySelectorAll('p');
+                    if (paragraphs.length >= 2) {
+                        const labelEl = paragraphs[0];
+                        const valueEl = paragraphs[1];
+                        if (labelEl && labelEl.textContent && labelEl.textContent.includes('Phone Number') && valueEl && valueEl.textContent) {
+                            const orig = valueEl.textContent.trim();
+                            if (orig && /^\+?[0-9]{7,15}$/.test(orig.replace(/\s/g, '')) && (orig.match(/ /g) || []).length < 2) {
+                                const formatted = formatPhoneNumber(orig);
+                                if (formatted !== orig) valueEl.textContent = formatted;
+                            }
+                        }
+                    }
+                });
+                document.querySelectorAll('span[data-name="Phone"]').forEach(function(span) {
+                    if (span && span.textContent) {
+                        const orig = span.textContent.trim();
+                        if (orig && /^\+?[0-9]{7,15}$/.test(orig.replace(/\s/g, '')) && (orig.match(/ /g) || []).length < 2) {
+                            const formatted = formatPhoneNumber(orig);
+                            if (formatted !== orig) span.textContent = formatted;
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Error in phone formatter:', error);
+            }
+            formattingInProgress = false;
+        }
+
+        setTimeout(formatPhoneNumbersInPage, 1500);
+        setInterval(formatPhoneNumbersInPage, 3000);
+
+        var phoneObserver = new MutationObserver(function() {
+            setTimeout(formatPhoneNumbersInPage, 500);
+        });
+        phoneObserver.observe(document.body, { childList: true, subtree: true });
     }
 
     // ================================
@@ -4488,27 +4280,21 @@
             case 'autoSelect':
                 initAutoSelectPlugin();
                 break;
-            case 'clipboard':
-                initClipboardPlugin();
-                break;
-            case 'dashboard':
-            case 'dropdown': // Backwards compatibility
-                initDashboardPlugin();
+            case 'dashboardTweaks':
+            case 'clipboard':  // backwards compat — merged into dashboardTweaks
+            case 'dashboard':  // backwards compat — merged into dashboardTweaks
+            case 'dropdown':   // backwards compat
+                initDashboardTweaksPlugin();
                 break;
             case 'initials':
                 initInitialsPlugin();
                 break;
-            case 'phone':
-                initPhonePlugin();
-                break;
-            case 'wordHighlighter':
-                initWordHighlighterPlugin();
+            case 'phone':      // backwards compat — merged into layoutFixes
+            case 'wordHighlighter': // removed — no-op for saved settings
                 break;
             case 'autoLinker':
+            case 'atMentionLinker': // backwards compat — merged into autoLinker
                 initAutoLinkerPlugin();
-                break;
-            case 'atMentionLinker':
-                initAtMentionLinkerPlugin();
                 break;
             case 'residentSearch':
                 initQuickAccessPlugin();
