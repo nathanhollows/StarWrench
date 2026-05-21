@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.14.0
+// @version      1.14.1
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.14.0';
+    const SUITE_VERSION = '1.14.1';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -641,62 +641,150 @@
             }
         }
 
-        async function loadAllRecords(dashboardItem) {
-            const container = dashboardItem.querySelector('.dashboard-item-container');
-            if (!container) return false;
-
-            // Get expected total record count
+        function getDashboardExpectedCount(dashboardItem) {
             const moduleOptions = dashboardItem.querySelector('.sys-module-options');
-            const footer = dashboardItem.querySelector('.dashboard-footer');
-            let expectedCount = 0;
-
             if (moduleOptions) {
-                const count = moduleOptions.getAttribute('data-recordcount');
-                expectedCount = count ? parseInt(count, 10) : 0;
+                const c = moduleOptions.getAttribute('data-recordcount');
+                if (c) return parseInt(c, 10);
+            }
+            const footer = dashboardItem.querySelector('.dashboard-footer');
+            if (footer) {
+                const m = footer.textContent.match(/Records:\s*(\d+)/);
+                if (m) return parseInt(m[1], 10);
+            }
+            return 0;
+        }
+
+        async function loadAllRecordsViaApi(dashboardItem) {
+            // Fast path: call StarRez's ActiveTable.GetPage endpoint directly.
+            // The pageable object key, pagesize, and TableBuilder metadata live on
+            // the .ui-active-table element; the lazy-load itself uses the same
+            // service internally — we just drive it without waiting on scroll.
+            const table = dashboardItem.querySelector('table.ui-active-table');
+            if (!table) return false;
+
+            const activeTableKey = table.getAttribute('data-pageable-object');
+            const metadataJsonBase64 = table.getAttribute('data-builder-metadata');
+            const metadataTypeName = table.getAttribute('data-builder-metadata-type');
+            const pageSize = parseInt(table.getAttribute('data-pagesize'), 10) || 30;
+            if (!activeTableKey || !metadataJsonBase64 || !metadataTypeName) return false;
+
+            if (typeof starrez === 'undefined' ||
+                !starrez.service || !starrez.service.controls ||
+                !starrez.service.controls.activeTable ||
+                !starrez.service.controls.activeTable.GetPage) {
+                return false;
             }
 
-            if (!expectedCount && footer) {
-                const match = footer.textContent.match(/Records:\s*(\d+)/);
-                expectedCount = match ? parseInt(match[1], 10) : 0;
-            }
+            const tbody = table.querySelector('tbody');
+            if (!tbody) return false;
 
-            if (!expectedCount) return true; // No count found, assume all loaded
+            const expectedCount = getDashboardExpectedCount(dashboardItem);
+            if (!expectedCount) return true;
 
-            // Keep scrolling until all records are loaded
-            let previousCount = 0;
-            let attempts = 0;
-            const maxAttempts = 100; // Safety limit
+            const tableBuilder = {
+                metadataTypeName: metadataTypeName,
+                metadataJsonBase64: metadataJsonBase64
+            };
 
-            while (attempts < maxAttempts) {
-                const currentRows = dashboardItem.querySelectorAll('tbody tr[data-recordid]');
-                const currentCount = currentRows.length;
+            const seen = new Set();
+            tbody.querySelectorAll('tr[data-recordid]').forEach(r => {
+                const id = r.getAttribute('data-recordid');
+                if (id) seen.add(id);
+            });
 
-                // Check if we have all records
-                if (currentCount >= expectedCount) {
+            // Initial render is page 0; subsequent batches are 1, 2, …
+            let pageNo = Math.max(1, Math.ceil(seen.size / pageSize));
+            let safety = 200;
+            while (safety-- > 0) {
+                if (tbody.querySelectorAll('tr[data-recordid]').length >= expectedCount) {
                     return true;
                 }
 
-                // Check if no new records loaded (might be stuck)
-                if (currentCount === previousCount) {
-                    attempts++;
-                    if (attempts > 3) {
-                        // Tried 3 times with no new records, assume we have all we can get
-                        return true;
-                    }
-                } else {
-                    attempts = 0; // Reset attempts counter if we got new records
+                let html;
+                try {
+                    const call = new starrez.service.controls.activeTable.GetPage(
+                        activeTableKey, pageNo, false, null, tableBuilder
+                    );
+                    html = await new Promise((resolve, reject) => {
+                        const req = call.Request();
+                        req.done(resolve);
+                        req.fail(() => reject(new Error('GetPage failed')));
+                    });
+                } catch (err) {
+                    return false; // Let caller fall back to scrolling
                 }
 
-                previousCount = currentCount;
+                if (!html || html === 'false') return true;
 
-                // Scroll to bottom of container
-                container.scrollTop = container.scrollHeight;
+                const tmp = document.createElement('tbody');
+                tmp.innerHTML = html;
+                const newRows = Array.from(tmp.querySelectorAll('tr'));
+                if (newRows.length === 0) return true;
 
-                // Wait for lazy load (2 seconds)
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                let appended = 0;
+                newRows.forEach(r => {
+                    const id = r.getAttribute('data-recordid');
+                    if (id && !seen.has(id)) {
+                        seen.add(id);
+                        tbody.appendChild(r);
+                        appended++;
+                    }
+                });
+
+                if (appended === 0) return true; // Server returned only dupes — done
+                pageNo++;
             }
-
             return true;
+        }
+
+        async function loadAllRecordsViaScroll(dashboardItem) {
+            const container = dashboardItem.querySelector('.dashboard-item-container');
+            if (!container) return false;
+
+            const expectedCount = getDashboardExpectedCount(dashboardItem);
+            if (!expectedCount) return true;
+
+            // While the user has a query active, hidden rows have zero height —
+            // the scroll container shrinks and the lazy-load trigger never fires.
+            // Temporarily restore display for any rows we hid, then re-filter
+            // once we're done.
+            const hidden = [];
+            dashboardItem.querySelectorAll('tbody tr[data-recordid]').forEach(r => {
+                if (r.style.display === 'none') {
+                    hidden.push(r);
+                    r.style.removeProperty('display');
+                }
+            });
+
+            try {
+                let previousCount = 0;
+                let stalls = 0;
+                const maxStalls = 8;
+                const pollDelay = 300;
+
+                while (stalls < maxStalls) {
+                    const currentCount = dashboardItem.querySelectorAll('tbody tr[data-recordid]').length;
+                    if (currentCount >= expectedCount) return true;
+                    if (currentCount === previousCount) stalls++; else stalls = 0;
+                    previousCount = currentCount;
+                    container.scrollTop = container.scrollHeight;
+                    await new Promise(resolve => setTimeout(resolve, pollDelay));
+                }
+                return true;
+            } finally {
+                // Re-filter rows; the MutationObserver handles newly arrived rows,
+                // but the ones we manually unhid need explicit re-application.
+                if (typeof currentSearchQuery !== 'undefined' && currentSearchQuery) {
+                    filterDashboardItem(dashboardItem, currentSearchQuery);
+                }
+            }
+        }
+
+        async function loadAllRecords(dashboardItem) {
+            const apiOk = await loadAllRecordsViaApi(dashboardItem);
+            if (apiOk) return true;
+            return loadAllRecordsViaScroll(dashboardItem);
         }
 
         async function handleClipboardClick(dashboardItem) {
@@ -981,6 +1069,10 @@
             if (autoLoadDebounce) clearTimeout(autoLoadDebounce);
             if (!query) return;
             autoLoadDebounce = setTimeout(() => {
+                // Fire all panels in parallel — loadAllRecords uses the StarRez
+                // ActiveTable.GetPage endpoint directly, so each panel's pages
+                // load over its own XHR rather than competing for the scroll
+                // container.
                 document.querySelectorAll('.dashboard-item').forEach(item => {
                     if (loadingInProgress.has(item)) return;
                     const result = filterDashboardItem(item, query);
@@ -995,7 +1087,7 @@
                         });
                     }
                 });
-            }, 500);
+            }, 200);
         }
 
         function observeTbody(dashboardItem) {
