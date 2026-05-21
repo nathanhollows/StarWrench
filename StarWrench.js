@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.14.1
+// @version      1.14.2
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.14.1';
+    const SUITE_VERSION = '1.14.2';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -656,18 +656,19 @@
         }
 
         async function loadAllRecordsViaApi(dashboardItem) {
-            // Fast path: call StarRez's ActiveTable.GetPage endpoint directly.
-            // The pageable object key, pagesize, and TableBuilder metadata live on
-            // the .ui-active-table element; the lazy-load itself uses the same
-            // service internally — we just drive it without waiting on scroll.
+            // Drive StarRez's own ActiveTable manager: it tracks currentPage,
+            // PagingObject, columnSorting, and isLoading per table, so by
+            // reusing it we stay in sync with the server's view of pagination
+            // and don't have to reverse-engineer the pageNo offset.
             const table = dashboardItem.querySelector('table.ui-active-table');
             if (!table) return false;
 
-            const activeTableKey = table.getAttribute('data-pageable-object');
-            const metadataJsonBase64 = table.getAttribute('data-builder-metadata');
-            const metadataTypeName = table.getAttribute('data-builder-metadata-type');
-            const pageSize = parseInt(table.getAttribute('data-pagesize'), 10) || 30;
-            if (!activeTableKey || !metadataJsonBase64 || !metadataTypeName) return false;
+            const jq = window.jQuery || window.$;
+            if (!jq) return false;
+
+            const $table = jq(table);
+            const mgr = $table.data('manager');
+            if (!mgr || !mgr.table || typeof mgr.currentPage !== 'number') return false;
 
             if (typeof starrez === 'undefined' ||
                 !starrez.service || !starrez.service.controls ||
@@ -682,58 +683,70 @@
             const expectedCount = getDashboardExpectedCount(dashboardItem);
             if (!expectedCount) return true;
 
-            const tableBuilder = {
-                metadataTypeName: metadataTypeName,
-                metadataJsonBase64: metadataJsonBase64
-            };
+            const pageSize = mgr.table.PageSize || parseInt(table.getAttribute('data-pagesize'), 10) || 30;
+            const startGeneration = loadGeneration;
 
-            const seen = new Set();
-            tbody.querySelectorAll('tr[data-recordid]').forEach(r => {
-                const id = r.getAttribute('data-recordid');
-                if (id) seen.add(id);
-            });
-
-            // Initial render is page 0; subsequent batches are 1, 2, …
-            let pageNo = Math.max(1, Math.ceil(seen.size / pageSize));
             let safety = 200;
             while (safety-- > 0) {
-                if (tbody.querySelectorAll('tr[data-recordid]').length >= expectedCount) {
+                if (startGeneration !== loadGeneration) return true; // cancelled by user
+                const currentCount = tbody.querySelectorAll('tr[data-recordid]').length;
+                if (currentCount >= expectedCount) return true;
+
+                // Wait out any in-flight lazy load triggered by StarRez itself
+                if (mgr.isLoading) {
+                    await new Promise(r => setTimeout(r, 50));
+                    continue;
+                }
+
+                // StarRez's own stop condition: if the last batch was partial,
+                // the server has nothing more to give.
+                if (typeof mgr.LastRowCount === 'number' && mgr.LastRowCount !== pageSize) {
                     return true;
                 }
 
-                let html;
+                mgr.isLoading = true;
+                mgr.currentPage = (mgr.currentPage || 0) + 1;
+
+                let res;
                 try {
                     const call = new starrez.service.controls.activeTable.GetPage(
-                        activeTableKey, pageNo, false, null, tableBuilder
+                        mgr.table.PagingObject,
+                        mgr.currentPage,
+                        typeof mgr.IsSelectAllChecked === 'function' ? mgr.IsSelectAllChecked() : false,
+                        mgr.columnSorting,
+                        mgr.table.TableBuilder
                     );
-                    html = await new Promise((resolve, reject) => {
+                    res = await new Promise((resolve, reject) => {
                         const req = call.Request();
                         req.done(resolve);
                         req.fail(() => reject(new Error('GetPage failed')));
                     });
                 } catch (err) {
-                    return false; // Let caller fall back to scrolling
+                    mgr.isLoading = false;
+                    return false;
                 }
 
-                if (!html || html === 'false') return true;
+                if (!res || res === 'false') {
+                    mgr.isLoading = false;
+                    mgr.LastRowCount = 0;
+                    return true;
+                }
 
-                const tmp = document.createElement('tbody');
-                tmp.innerHTML = html;
-                const newRows = Array.from(tmp.querySelectorAll('tr'));
-                if (newRows.length === 0) return true;
+                const parsed = jq.parseHTML(res);
+                const $rows = jq(parsed).filter('tr').add(jq(parsed).find('tr'));
+                if ($rows.length === 0) {
+                    mgr.isLoading = false;
+                    mgr.LastRowCount = 0;
+                    return true;
+                }
 
-                let appended = 0;
-                newRows.forEach(r => {
-                    const id = r.getAttribute('data-recordid');
-                    if (id && !seen.has(id)) {
-                        seen.add(id);
-                        tbody.appendChild(r);
-                        appended++;
-                    }
-                });
+                $table.find('tbody').append($rows);
+                mgr.LastRowCount = $rows.length;
+                mgr.isLoading = false;
 
-                if (appended === 0) return true; // Server returned only dupes — done
-                pageNo++;
+                if (typeof mgr.AttachEvents === 'function') {
+                    try { mgr.AttachEvents(); } catch (e) { /* ignore — events are best-effort */ }
+                }
             }
             return true;
         }
@@ -758,12 +771,14 @@
             });
 
             try {
+                const startGeneration = loadGeneration;
                 let previousCount = 0;
                 let stalls = 0;
                 const maxStalls = 8;
                 const pollDelay = 300;
 
                 while (stalls < maxStalls) {
+                    if (startGeneration !== loadGeneration) return true; // cancelled by user
                     const currentCount = dashboardItem.querySelectorAll('tbody tr[data-recordid]').length;
                     if (currentCount >= expectedCount) return true;
                     if (currentCount === previousCount) stalls++; else stalls = 0;
@@ -1065,6 +1080,81 @@
             items.forEach(item => filterDashboardItem(item, query));
         }
 
+        let pendingPanelLoads = 0;
+        let loadGeneration = 0;
+        let loadingPlaceholderTimer = null;
+
+        function cancelAllLoads() {
+            // Bumping the generation is the signal — every in-flight loader
+            // checks this between iterations and bails. The current in-flight
+            // XHR (if any) will still complete (jQuery deferred isn't trivially
+            // cancellable mid-flight), but the loader exits before kicking off
+            // the next page.
+            loadGeneration++;
+        }
+        const LOADING_PLACEHOLDERS = [
+            'Loading dashboard data',
+            'Fetching panel records',
+            'Pulling more rows',
+            'Almost there'
+        ];
+
+        function updateSearchLoadingUI() {
+            const inputs = document.querySelectorAll('.sw-dashboard-search-input');
+            const isLoading = pendingPanelLoads > 0;
+
+            inputs.forEach(input => {
+                const wrap = input.parentElement;
+                if (!wrap) return;
+                const clearBtn = wrap.querySelector('.sw-dashboard-search-clear');
+                const spinner = wrap.querySelector('.sw-dashboard-search-spinner');
+                if (!clearBtn || !spinner) return;
+
+                if (isLoading) {
+                    if (!input.hasAttribute('data-sw-placeholder-orig')) {
+                        input.setAttribute('data-sw-placeholder-orig', input.placeholder || '');
+                    }
+                    input.placeholder = LOADING_PLACEHOLDERS[0] + '…';
+                    spinner.style.display = '';
+                    clearBtn.style.display = 'none';
+                } else {
+                    const orig = input.getAttribute('data-sw-placeholder-orig');
+                    if (orig !== null) {
+                        input.placeholder = orig;
+                        input.removeAttribute('data-sw-placeholder-orig');
+                    }
+                    spinner.style.display = 'none';
+                    clearBtn.style.display = input.value ? '' : 'none';
+                }
+            });
+
+            if (isLoading && !loadingPlaceholderTimer) {
+                let idx = 0;
+                loadingPlaceholderTimer = setInterval(() => {
+                    idx = (idx + 1) % LOADING_PLACEHOLDERS.length;
+                    document.querySelectorAll('.sw-dashboard-search-input').forEach(input => {
+                        if (input.hasAttribute('data-sw-placeholder-orig')) {
+                            input.placeholder = LOADING_PLACEHOLDERS[idx] + '…';
+                        }
+                    });
+                }, 1800);
+            } else if (!isLoading && loadingPlaceholderTimer) {
+                clearInterval(loadingPlaceholderTimer);
+                loadingPlaceholderTimer = null;
+            }
+        }
+
+        function trackLoad(promise) {
+            pendingPanelLoads++;
+            updateSearchLoadingUI();
+            const finish = () => {
+                pendingPanelLoads = Math.max(0, pendingPanelLoads - 1);
+                updateSearchLoadingUI();
+            };
+            promise.then(finish, finish);
+            return promise;
+        }
+
         function preloadAllPanels() {
             // Kick off a parallel fetch on every panel that still has unloaded
             // records, so by the time the user starts typing the data is here.
@@ -1076,14 +1166,14 @@
                 const currentRows = item.querySelectorAll('tbody tr[data-recordid]').length;
                 if (expected > currentRows) {
                     loadingInProgress.add(item);
-                    loadAllRecords(item).then(() => {
+                    trackLoad(loadAllRecords(item).then(() => {
                         loadingInProgress.delete(item);
                         if (currentSearchQuery) {
                             filterDashboardItem(item, currentSearchQuery);
                         }
                     }).catch(() => {
                         loadingInProgress.delete(item);
-                    });
+                    }));
                 }
             });
         }
@@ -1102,12 +1192,12 @@
                     const expected = getExpectedCount(item);
                     if (result.visible === 0 && expected > result.total) {
                         loadingInProgress.add(item);
-                        loadAllRecords(item).then(() => {
+                        trackLoad(loadAllRecords(item).then(() => {
                             loadingInProgress.delete(item);
                             filterDashboardItem(item, currentSearchQuery);
                         }).catch(() => {
                             loadingInProgress.delete(item);
-                        });
+                        }));
                     }
                 });
             }, 200);
@@ -1161,6 +1251,13 @@
             clearBtn.addEventListener('mouseenter', () => { clearBtn.style.background = '#eef1f5'; clearBtn.style.color = '#333'; });
             clearBtn.addEventListener('mouseleave', () => { clearBtn.style.background = 'transparent'; clearBtn.style.color = '#888'; });
 
+            const spinner = document.createElement('span');
+            spinner.className = 'sw-dashboard-search-spinner';
+            spinner.setAttribute('aria-label', 'Loading dashboard data');
+            spinner.setAttribute('role', 'status');
+            spinner.innerHTML = '<i class="fa fa-spinner fa-spin"></i>';
+            spinner.style.cssText = 'position: absolute; right: 0.7em; top: 50%; transform: translateY(-50%); color: #4a90e2; display: none; pointer-events: none; font-size: 0.95em;';
+
             input.addEventListener('focus', () => {
                 input.style.borderColor = '#4a90e2';
                 input.style.boxShadow = '0 0 0 3px rgba(74,144,226,0.18)';
@@ -1173,7 +1270,11 @@
 
             function setQuery(q) {
                 currentSearchQuery = (q || '').toLowerCase();
-                clearBtn.style.display = q ? '' : 'none';
+                // updateSearchLoadingUI takes care of the spinner-vs-clear toggle
+                // when a load is in flight; this branch only runs when idle.
+                if (pendingPanelLoads === 0) {
+                    clearBtn.style.display = q ? '' : 'none';
+                }
                 applyFilterEverywhere(currentSearchQuery);
                 scheduleAutoLoad(currentSearchQuery);
             }
@@ -1182,7 +1283,14 @@
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
                     e.preventDefault();
-                    if (input.value) {
+                    if (pendingPanelLoads > 0) {
+                        // Cancel in-flight loads first — let the user filter on
+                        // whatever's already loaded. A second Esc clears text.
+                        cancelAllLoads();
+                        if (currentSearchQuery) {
+                            applyFilterEverywhere(currentSearchQuery);
+                        }
+                    } else if (input.value) {
                         input.value = '';
                         setQuery('');
                     } else {
@@ -1200,7 +1308,12 @@
             inputWrap.appendChild(icon);
             inputWrap.appendChild(input);
             inputWrap.appendChild(clearBtn);
+            inputWrap.appendChild(spinner);
             wrapper.appendChild(inputWrap);
+
+            // If a load is already in flight (e.g., header re-added via SPA nav),
+            // make this new input reflect that immediately.
+            updateSearchLoadingUI();
 
             const buttons = headerEl.querySelector('.buttons.ui-dashboardbuttons');
             if (buttons) {
