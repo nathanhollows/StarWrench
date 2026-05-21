@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.13.0
+// @version      1.14.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.13.0';
+    const SUITE_VERSION = '1.14.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -38,7 +38,7 @@
             dashboardTweaks: {
                 enabled: true,
                 name: '📊 Dashboard Tweaks',
-                description: 'Adds search to the dashboard dropdown menu and a button to copy Entry IDs to clipboard'
+                description: 'Adds search to dashboard headers (filters rows across all panels), search to the dashboard dropdown menu, and a button to copy Entry IDs to clipboard'
             },
             initials: {
                 enabled: true,
@@ -931,6 +931,198 @@
             scanForDropdowns();
         });
         observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+
+        // ── DASHBOARD HEADER SEARCH ───────────────────────────────────────────
+        const HEADER_SEARCH_ADDED = 'data-sw-dashboard-search';
+        const TBODY_OBSERVED = 'data-sw-tbody-observed';
+        let currentSearchQuery = '';
+        let autoLoadDebounce = null;
+        const loadingInProgress = new WeakSet();
+
+        function getExpectedCount(dashboardItem) {
+            const moduleOptions = dashboardItem.querySelector('.sys-module-options');
+            if (moduleOptions) {
+                const c = moduleOptions.getAttribute('data-recordcount');
+                if (c) return parseInt(c, 10);
+            }
+            const footer = dashboardItem.querySelector('.dashboard-footer');
+            if (footer) {
+                const m = footer.textContent.match(/Records:\s*(\d+)/);
+                if (m) return parseInt(m[1], 10);
+            }
+            return 0;
+        }
+
+        function filterDashboardItem(dashboardItem, query) {
+            const rows = dashboardItem.querySelectorAll('tbody tr[data-recordid]');
+            let visible = 0;
+            rows.forEach(row => {
+                if (!query || (row.textContent || '').toLowerCase().includes(query)) {
+                    row.style.removeProperty('display');
+                    visible++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+            if (query && rows.length > 0 && visible === 0) {
+                dashboardItem.classList.add('sw-empty-dashboard');
+            } else {
+                dashboardItem.classList.remove('sw-empty-dashboard');
+            }
+            return { total: rows.length, visible: visible };
+        }
+
+        function applyFilterEverywhere(query) {
+            const items = document.querySelectorAll('.dashboard-item');
+            items.forEach(item => filterDashboardItem(item, query));
+        }
+
+        function scheduleAutoLoad(query) {
+            if (autoLoadDebounce) clearTimeout(autoLoadDebounce);
+            if (!query) return;
+            autoLoadDebounce = setTimeout(() => {
+                document.querySelectorAll('.dashboard-item').forEach(item => {
+                    if (loadingInProgress.has(item)) return;
+                    const result = filterDashboardItem(item, query);
+                    const expected = getExpectedCount(item);
+                    if (result.visible === 0 && expected > result.total) {
+                        loadingInProgress.add(item);
+                        loadAllRecords(item).then(() => {
+                            loadingInProgress.delete(item);
+                            filterDashboardItem(item, currentSearchQuery);
+                        }).catch(() => {
+                            loadingInProgress.delete(item);
+                        });
+                    }
+                });
+            }, 500);
+        }
+
+        function observeTbody(dashboardItem) {
+            const tbody = dashboardItem.querySelector('tbody');
+            if (!tbody || tbody.hasAttribute(TBODY_OBSERVED)) return;
+            tbody.setAttribute(TBODY_OBSERVED, 'true');
+            const obs = new MutationObserver(() => {
+                if (currentSearchQuery) {
+                    filterDashboardItem(dashboardItem, currentSearchQuery);
+                }
+            });
+            obs.observe(tbody, { childList: true });
+        }
+
+        function observeAllTbodies() {
+            document.querySelectorAll('.dashboard-item').forEach(observeTbody);
+        }
+
+        function addHeaderSearch(headerEl) {
+            if (headerEl.hasAttribute(HEADER_SEARCH_ADDED)) return;
+            if (!headerEl.querySelector('.ui-dashboardbuttons')) return;
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'sw-dashboard-search';
+            wrapper.style.cssText = 'flex: 1 1 auto; display: flex; justify-content: center; align-items: center; margin: 0 1.5em; min-width: 0;';
+
+            const inputWrap = document.createElement('div');
+            inputWrap.style.cssText = 'position: relative; width: 100%; max-width: 460px;';
+
+            const icon = document.createElement('i');
+            icon.className = 'fa fa-search';
+            icon.style.cssText = 'position: absolute; left: 0.85em; top: 50%; transform: translateY(-50%); color: #888; pointer-events: none; font-size: 0.9em;';
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.placeholder = 'Search dashboard';
+            input.className = 'sw-dashboard-search-input';
+            input.setAttribute('aria-label', 'Search dashboard rows');
+            input.style.cssText = 'width: 100%; padding: 0.5em 2.2em 0.5em 2.2em; border-radius: 999px; border: 1px solid #cfd6e0; background: #fff; font-size: 0.95em; outline: none; box-shadow: 0 1px 2px rgba(0,0,0,0.04); transition: border-color 0.15s, box-shadow 0.15s; box-sizing: border-box;';
+
+            const clearBtn = document.createElement('button');
+            clearBtn.type = 'button';
+            clearBtn.className = 'sw-dashboard-search-clear';
+            clearBtn.setAttribute('aria-label', 'Clear search');
+            clearBtn.title = 'Clear (Esc)';
+            clearBtn.innerHTML = '<i class="fa fa-times"></i>';
+            clearBtn.style.cssText = 'position: absolute; right: 0.35em; top: 50%; transform: translateY(-50%); background: transparent; border: none; cursor: pointer; padding: 0.3em 0.55em; color: #888; display: none; border-radius: 999px;';
+            clearBtn.addEventListener('mouseenter', () => { clearBtn.style.background = '#eef1f5'; clearBtn.style.color = '#333'; });
+            clearBtn.addEventListener('mouseleave', () => { clearBtn.style.background = 'transparent'; clearBtn.style.color = '#888'; });
+
+            input.addEventListener('focus', () => {
+                input.style.borderColor = '#4a90e2';
+                input.style.boxShadow = '0 0 0 3px rgba(74,144,226,0.18)';
+            });
+            input.addEventListener('blur', () => {
+                input.style.borderColor = '#cfd6e0';
+                input.style.boxShadow = '0 1px 2px rgba(0,0,0,0.04)';
+            });
+
+            function setQuery(q) {
+                currentSearchQuery = (q || '').toLowerCase();
+                clearBtn.style.display = q ? '' : 'none';
+                applyFilterEverywhere(currentSearchQuery);
+                scheduleAutoLoad(currentSearchQuery);
+            }
+
+            input.addEventListener('input', () => setQuery(input.value));
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    if (input.value) {
+                        input.value = '';
+                        setQuery('');
+                    } else {
+                        input.blur();
+                    }
+                }
+            });
+
+            clearBtn.addEventListener('click', () => {
+                input.value = '';
+                setQuery('');
+                input.focus();
+            });
+
+            inputWrap.appendChild(icon);
+            inputWrap.appendChild(input);
+            inputWrap.appendChild(clearBtn);
+            wrapper.appendChild(inputWrap);
+
+            const buttons = headerEl.querySelector('.buttons.ui-dashboardbuttons');
+            if (buttons) {
+                headerEl.insertBefore(wrapper, buttons);
+            } else {
+                headerEl.appendChild(wrapper);
+            }
+
+            // Make header layout flex so search sits between title and buttons
+            const computed = window.getComputedStyle(headerEl);
+            if (computed.display !== 'flex') {
+                headerEl.style.display = 'flex';
+                headerEl.style.alignItems = 'center';
+            }
+            const h1 = headerEl.querySelector('h1');
+            if (h1) h1.style.flex = '0 0 auto';
+
+            headerEl.setAttribute(HEADER_SEARCH_ADDED, 'true');
+        }
+
+        function scanDashboardHeaders() {
+            document.querySelectorAll('header').forEach(h => {
+                if (h.querySelector('.ui-dashboardbuttons')) {
+                    addHeaderSearch(h);
+                }
+            });
+            observeAllTbodies();
+            if (currentSearchQuery) {
+                applyFilterEverywhere(currentSearchQuery);
+            }
+        }
+
+        setTimeout(scanDashboardHeaders, 1000);
+
+        const dashSearchObserver = new MutationObserver(() => {
+            scanDashboardHeaders();
+        });
+        dashSearchObserver.observe(document.body, { childList: true, subtree: true });
     }
 
     // INITIALS HIGHLIGHTER PLUGIN
@@ -4134,10 +4326,12 @@
                 display: flex;
                 flex-direction: column;
             }
-            .dashboard-item:has(.panel-error) {
+            .dashboard-item:has(.panel-error),
+            .dashboard-item.sw-empty-dashboard {
                 order: 99;
             }
-            .dashboard-item:has(.panel-error) .item-title.ui-dashboard-item-title {
+            .dashboard-item:has(.panel-error) .item-title.ui-dashboard-item-title,
+            .dashboard-item.sw-empty-dashboard .item-title.ui-dashboard-item-title {
                 color: #676767;
                 background-color: #e3e3e3;
             }
