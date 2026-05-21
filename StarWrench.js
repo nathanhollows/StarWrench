@@ -1065,6 +1065,29 @@
             items.forEach(item => filterDashboardItem(item, query));
         }
 
+        function preloadAllPanels() {
+            // Kick off a parallel fetch on every panel that still has unloaded
+            // records, so by the time the user starts typing the data is here.
+            // loadAllRecords no-ops when current >= expected, and loadingInProgress
+            // dedupes concurrent calls, so this is safe to fire repeatedly.
+            document.querySelectorAll('.dashboard-item').forEach(item => {
+                if (loadingInProgress.has(item)) return;
+                const expected = getExpectedCount(item);
+                const currentRows = item.querySelectorAll('tbody tr[data-recordid]').length;
+                if (expected > currentRows) {
+                    loadingInProgress.add(item);
+                    loadAllRecords(item).then(() => {
+                        loadingInProgress.delete(item);
+                        if (currentSearchQuery) {
+                            filterDashboardItem(item, currentSearchQuery);
+                        }
+                    }).catch(() => {
+                        loadingInProgress.delete(item);
+                    });
+                }
+            });
+        }
+
         function scheduleAutoLoad(query) {
             if (autoLoadDebounce) clearTimeout(autoLoadDebounce);
             if (!query) return;
@@ -1141,6 +1164,7 @@
             input.addEventListener('focus', () => {
                 input.style.borderColor = '#4a90e2';
                 input.style.boxShadow = '0 0 0 3px rgba(74,144,226,0.18)';
+                preloadAllPanels();
             });
             input.addEventListener('blur', () => {
                 input.style.borderColor = '#cfd6e0';
