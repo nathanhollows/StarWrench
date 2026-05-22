@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.14.2
+// @version      1.14.3
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.14.2';
+    const SUITE_VERSION = '1.14.3';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1219,9 +1219,27 @@
             document.querySelectorAll('.dashboard-item').forEach(observeTbody);
         }
 
+        function resetDashboardSearchState() {
+            // Called on dashboard navigation. The header element is replaced,
+            // but currentSearchQuery lived in the plugin closure and would
+            // otherwise carry over and re-filter the new dashboard's rows
+            // while the freshly created input shows empty.
+            currentSearchQuery = '';
+            cancelAllLoads();
+            document.querySelectorAll('.sw-dashboard-search-input').forEach(input => {
+                if (input.value) input.value = '';
+            });
+            applyFilterEverywhere('');
+            updateSearchLoadingUI();
+        }
+
         function addHeaderSearch(headerEl) {
             if (headerEl.hasAttribute(HEADER_SEARCH_ADDED)) return;
             if (!headerEl.querySelector('.ui-dashboardbuttons')) return;
+
+            // Belt-and-braces: a new dashboard header element means we navigated.
+            // If state somehow stuck around, drop it before wiring the new input.
+            resetDashboardSearchState();
 
             const wrapper = document.createElement('div');
             wrapper.className = 'sw-dashboard-search';
@@ -1352,6 +1370,12 @@
             scanDashboardHeaders();
         });
         dashSearchObserver.observe(document.body, { childList: true, subtree: true });
+
+        // StarRez routes via #! URLs — navigating between dashboards fires
+        // hashchange. Reset filter state so the new dashboard renders with
+        // nothing hidden, no matter what was in the search bar before.
+        window.addEventListener('hashchange', resetDashboardSearchState);
+        window.addEventListener('popstate', resetDashboardSearchState);
     }
 
     // INITIALS HIGHLIGHTER PLUGIN
