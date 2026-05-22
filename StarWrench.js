@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.14.3
+// @version      1.15.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.14.3';
+    const SUITE_VERSION = '1.15.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -3337,18 +3337,19 @@
         }
 
         // Add all @-mentioned residents as participants in one request
-        function addLinkedParticipants(ids, button) {
+        function addLinkedParticipants(ids, button, opts) {
+            const silent = !!(opts && opts.silent);
             const screenInfo = getCurrentScreenInfo();
             if (!screenInfo) {
-                alert('Cannot determine page type.');
+                if (!silent) alert('Cannot determine page type.');
                 return;
             }
             if (!window.starrez || !window.starrez.ServerRequest) {
-                alert('StarRez API not available. Please refresh and try again.');
+                if (!silent) alert('StarRez API not available. Please refresh and try again.');
                 return;
             }
 
-            button.disabled = true;
+            if (button) button.disabled = true;
             const idsStr = ids.join(',');
             const lastId = ids[ids.length - 1];
             let call;
@@ -3389,13 +3390,13 @@
                     true, 0, new Date()
                 );
             } else {
-                button.disabled = false;
+                if (button) button.disabled = false;
                 return;
             }
 
-            call.Request({ ShowLoading: true }).done(function() {
+            call.Request({ ShowLoading: !silent }).done(function() {
                 console.log('[QuickAddParticipants] Linked participants added: ' + idsStr);
-                if (typeof toastr !== 'undefined') {
+                if (!silent && typeof toastr !== 'undefined') {
                     toastr.success('', 'Added ' + ids.length + ' participant' + (ids.length === 1 ? '' : 's'));
                 }
                 if (typeof starrez.sm !== 'undefined' && starrez.sm.RefreshCurrentSection) {
@@ -3403,15 +3404,21 @@
                 }
             }).fail(function(jqXHR, textStatus, errorThrown) {
                 console.error('[QuickAddParticipants] Error linking participants:', errorThrown);
-                if (typeof toastr !== 'undefined') {
-                    toastr.error('Please try again or add manually.', 'Failed to add participants');
-                } else {
-                    alert('Failed to add participants. Please try again or add manually.');
+                if (!silent) {
+                    if (typeof toastr !== 'undefined') {
+                        toastr.error('Please try again or add manually.', 'Failed to add participants');
+                    } else {
+                        alert('Failed to add participants. Please try again or add manually.');
+                    }
                 }
             }).always(function() {
-                button.disabled = false;
+                if (button) button.disabled = false;
             });
         }
+
+        // Tracks the screen id we've already silently auto-linked on, so we
+        // don't re-fire when StarRez re-renders the section after the request.
+        let autoLinkFiredForScreen = null;
 
         function insertAutoLinkButton() {
             if (document.querySelector('.starwrench-autolink-btn')) return true;
@@ -3441,6 +3448,35 @@
 
             editBtn.parentElement.insertBefore(button, editBtn);
             console.log('[QuickAddParticipants] Auto Link button added');
+
+            // Silent auto-fire: skip already-existing participants, no toasts.
+            // Delayed so the participants list has time to render — without
+            // that, every @-mention looks "new" and we'd duplicate.
+            setTimeout(function() {
+                try {
+                    const screenInfo = getCurrentScreenInfo();
+                    const screenKey = screenInfo ? screenInfo.type + ':' + screenInfo.id : null;
+                    if (!screenKey || autoLinkFiredForScreen === screenKey) return;
+
+                    const ids = collectAutoLinkIds();
+                    if (ids.length === 0) return;
+
+                    const container = button.closest('habitat-fieldset') || document;
+                    const existing = getExistingParticipants(container);
+                    const newIds = ids.filter(function(id) { return !isAlreadyParticipant(id, existing); });
+                    if (newIds.length === 0) {
+                        autoLinkFiredForScreen = screenKey; // nothing to do, but mark as handled
+                        return;
+                    }
+
+                    autoLinkFiredForScreen = screenKey;
+                    console.log('[QuickAddParticipants] Silent auto-link: ' + newIds.length + ' new participant(s)');
+                    addLinkedParticipants(newIds, button, { silent: true });
+                } catch (err) {
+                    console.error('[QuickAddParticipants] Silent auto-link failed:', err);
+                }
+            }, 1200);
+
             return true;
         }
 

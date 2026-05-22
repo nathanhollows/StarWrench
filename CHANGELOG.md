@@ -10,6 +10,9 @@ All notable changes to StarWrench will be documented in this file.
 
 ### Fixed
 - Dashboard search filter no longer carries over when navigating between dashboards. The previous query stayed in plugin closure state and re-filtered the new dashboard's rows while the freshly created search input rendered empty.
+
+### Added
+- Quick Add Participants: Auto Link Participants button now silently auto-fires once when it loads on a Duty Rounds or Incident screen — adds any @-mentioned residents not already participants without any toast or popup. Clicking the button manually still shows success/failure toasts as before.
 - Quick Incident Participants plugin now fully functional - can add residents to incidents via StarRez API
 - Proper StarRez API integration using `starrez.sm.GetCurrentlyDisplayedScreenID()` for incident ID detection
 
