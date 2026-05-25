@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.15.0
+// @version      1.16.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.15.0';
+    const SUITE_VERSION = '1.16.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1689,9 +1689,16 @@
         }
 
         // ── AT-MENTION LINKER ─────────────────────────────────────────────────
+        // Entry/@-mention links carry resident names — when a plugin user copies
+        // a report we want the full name OUT of the clipboard so they can paste
+        // without leaking PII. user-select: none excludes the span's text from
+        // selections, so copy yields the surrounding context (e.g. "NH ") only.
+        const ENTRY_LINK_STYLE = LINK_STYLE + '; user-select: none; -webkit-user-select: none';
+        const ENTRY_LINK_STYLE_HOVER = LINK_STYLE_HOVER + '; user-select: none; -webkit-user-select: none';
+
         function createEntryLink(entryId) {
             const link = document.createElement('span');
-            link.setAttribute('style', LINK_STYLE);
+            link.setAttribute('style', ENTRY_LINK_STYLE);
             link.setAttribute('data-sw-at-link', 'true');
             link.setAttribute('data-sw-autolink-id', entryId);
 
@@ -1706,8 +1713,8 @@
 
             link.textContent = displayText;
             link.title = 'Open entry ' + entryId;
-            link.addEventListener('mouseenter', function() { link.setAttribute('style', LINK_STYLE_HOVER); });
-            link.addEventListener('mouseleave', function() { link.setAttribute('style', LINK_STYLE); });
+            link.addEventListener('mouseenter', function() { link.setAttribute('style', ENTRY_LINK_STYLE_HOVER); });
+            link.addEventListener('mouseleave', function() { link.setAttribute('style', ENTRY_LINK_STYLE); });
             link.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -1980,13 +1987,46 @@
             acRender();
         }
 
+        // Initials of every space-separated name part of the displayed name
+        // (preferred + last), uppercase. "Mary Jane Smith" → "MJS", mononyms
+        // collapse to a single letter. If the resident isn't in the local DB,
+        // we have no initials to derive — per spec, fall through to a plain
+        // @id insert so the picker still works in the degenerate case.
+        function getResidentInitials(entryId) {
+            if (typeof window.starWrenchResidentDB === 'undefined') return null;
+            var r = window.starWrenchResidentDB.getById(entryId);
+            if (!r) return null;
+            var firstName = (r.namePreferred || r.nameFirst || '').trim();
+            var lastName = (r.nameLast || '').trim();
+            var combined = (firstName + ' ' + lastName).trim();
+            if (!combined) return null;
+            return combined.split(/\s+/).map(function(part) {
+                return part.charAt(0).toUpperCase();
+            }).join('');
+        }
+
         function acInsert(entryId) {
             if (!acField || acAtPos < 0) return;
             var field = acField;
             var cursor = field.selectionStart;
             var before = field.value.substring(0, acAtPos);
             var after = field.value.substring(cursor);
-            var insertion = '@' + entryId + ' ';
+
+            var initials = getResidentInitials(entryId);
+            // Per-textarea anchor: if @id already lives anywhere in this field's
+            // current value, this is a repeat mention — drop the @id so OIA-
+            // stripped reports stay short and clean. The first occurrence keeps
+            // the @id so plugin users (and the linker) have something to bind to.
+            var alreadyAnchored = new RegExp('@' + entryId + '\\b').test(field.value);
+            var insertion;
+            if (initials && alreadyAnchored) {
+                insertion = initials + ' ';
+            } else if (initials) {
+                insertion = initials + ' @' + entryId + ' ';
+            } else {
+                insertion = '@' + entryId + ' ';
+            }
+
             field.value = before + insertion + after;
             var newPos = before.length + insertion.length;
             field.setSelectionRange(newPos, newPos);
