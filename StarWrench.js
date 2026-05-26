@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.16.1
+// @version      1.16.2
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.16.1';
+    const SUITE_VERSION = '1.16.2';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2005,17 +2005,17 @@
             }).join('');
         }
 
-        // Console utility: take a block of text containing raw @id mentions and
-        // rewrite it to the picker's "INITIALS @id" + bare "INITIALS" repeat
-        // format. Lets users retrofit old records without a UI element — paste
-        // old text, run, copy result back.
+        // Console utility: rewrite raw @id mentions in a block of text to the
+        // picker's "INITIALS @id" + bare "INITIALS" repeat format. Lets users
+        // retrofit old records without a UI element.
         //
         // Usage:
-        //   copy(starWrenchInjectInitials(`paste old text here`))
+        //   await starWrenchInjectInitials()        // reads + writes clipboard
+        //   starWrenchInjectInitials(`some text`)   // sync, returns transformed
         //
         // Idempotent: re-running on already-prefixed text leaves it alone.
         // Mentions whose IDs aren't in the resident DB are left untouched.
-        function injectInitials(text) {
+        function injectInitialsTransform(text) {
             if (typeof text !== 'string') return text;
             var seen = Object.create(null);
 
@@ -2035,7 +2035,6 @@
                     return match;
                 }
                 if (seen[id]) {
-                    // Repeat mention in the same block — strip the @id anchor
                     return initials;
                 }
                 seen[id] = true;
@@ -2043,7 +2042,47 @@
             });
         }
 
-        window.starWrenchInjectInitials = injectInitials;
+        async function injectInitialsFromClipboard() {
+            if (!navigator.clipboard || !navigator.clipboard.readText) {
+                console.error('[StarWrench] Clipboard API unavailable. Pass text directly: starWrenchInjectInitials(`...`)');
+                return;
+            }
+            if (!document.hasFocus()) {
+                console.warn('[StarWrench] Document is not focused — click anywhere on the page, then re-run.');
+                return;
+            }
+            var input;
+            try {
+                input = await navigator.clipboard.readText();
+            } catch (err) {
+                console.error('[StarWrench] Clipboard read failed:', err && err.message ? err.message : err);
+                console.error('[StarWrench] Tip: click anywhere on the page first so the document has focus, then re-run.');
+                return;
+            }
+            var output = injectInitialsTransform(input);
+            if (output === input) {
+                console.log('[StarWrench] No changes — clipboard already in initials format (or no @id mentions found).');
+                return output;
+            }
+            try {
+                await navigator.clipboard.writeText(output);
+            } catch (err) {
+                console.error('[StarWrench] Clipboard write failed:', err && err.message ? err.message : err);
+                console.log('[StarWrench] Transformed text (copy manually):\n' + output);
+                return output;
+            }
+            // Count what changed for a useful confirmation message
+            var mentionMatches = output.match(/@(\d{4,7})\b/g) || [];
+            var uniqueIds = new Set(mentionMatches.map(function(m) { return m.slice(1); }));
+            console.log('[StarWrench] Clipboard updated — ' + uniqueIds.size + ' resident(s), ' + mentionMatches.length + ' anchor(s). Paste into the field.');
+            return output;
+        }
+
+        // Dual-mode API: no args → clipboard (async), text arg → pure transform (sync).
+        window.starWrenchInjectInitials = function(text) {
+            if (typeof text === 'undefined') return injectInitialsFromClipboard();
+            return injectInitialsTransform(text);
+        };
 
         function acInsert(entryId) {
             if (!acField || acAtPos < 0) return;
