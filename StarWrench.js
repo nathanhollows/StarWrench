@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.16.0
+// @version      1.16.1
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.16.0';
+    const SUITE_VERSION = '1.16.1';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2004,6 +2004,46 @@
                 return part.charAt(0).toUpperCase();
             }).join('');
         }
+
+        // Console utility: take a block of text containing raw @id mentions and
+        // rewrite it to the picker's "INITIALS @id" + bare "INITIALS" repeat
+        // format. Lets users retrofit old records without a UI element — paste
+        // old text, run, copy result back.
+        //
+        // Usage:
+        //   copy(starWrenchInjectInitials(`paste old text here`))
+        //
+        // Idempotent: re-running on already-prefixed text leaves it alone.
+        // Mentions whose IDs aren't in the resident DB are left untouched.
+        function injectInitials(text) {
+            if (typeof text !== 'string') return text;
+            var seen = Object.create(null);
+
+            return text.replace(/@(\d{4,7})\b/g, function(match, id, offset, full) {
+                var initials = getResidentInitials(id);
+                if (!initials) return match;
+
+                // Treat as already-prefixed only if the *correct* initials for
+                // this resident sit directly before the @ — unrelated uppercase
+                // words ("FYI @123") are kept and the @id is still expanded.
+                var lookbackLen = initials.length + 2;
+                var preceding = full.substring(Math.max(0, offset - lookbackLen), offset);
+                var alreadyPrefixed = new RegExp('(?:^|\\W)' + initials + '\\s+$').test(preceding);
+
+                if (alreadyPrefixed) {
+                    seen[id] = true;
+                    return match;
+                }
+                if (seen[id]) {
+                    // Repeat mention in the same block — strip the @id anchor
+                    return initials;
+                }
+                seen[id] = true;
+                return initials + ' @' + id;
+            });
+        }
+
+        window.starWrenchInjectInitials = injectInitials;
 
         function acInsert(entryId) {
             if (!acField || acAtPos < 0) return;
