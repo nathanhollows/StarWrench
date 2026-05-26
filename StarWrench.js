@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.16.3
+// @version      1.16.4
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.16.3';
+    const SUITE_VERSION = '1.16.4';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2093,10 +2093,7 @@
                 console.log('[StarWrench] Transformed text (copy manually):\n' + output);
                 return output;
             }
-            // Count what changed for a useful confirmation message
-            var mentionMatches = output.match(/@(\d{4,7})\b/g) || [];
-            var uniqueIds = new Set(mentionMatches.map(function(m) { return m.slice(1); }));
-            console.log('[StarWrench] Clipboard updated — ' + uniqueIds.size + ' resident(s), ' + mentionMatches.length + ' anchor(s). Paste into the field.');
+            console.log('[StarWrench] Clipboard updated. Paste into the field.');
             return output;
         }
 
@@ -3590,9 +3587,16 @@
             editBtn.parentElement.insertBefore(button, editBtn);
             console.log('[QuickAddParticipants] Auto Link button added');
 
-            // Silent auto-fire: skip already-existing participants, no toasts.
-            // Delayed so the participants list has time to render — without
-            // that, every @-mention looks "new" and we'd duplicate.
+            scheduleSilentAutoLink(button);
+            return true;
+        }
+
+        // Silent auto-fire: collect @-mentioned residents, skip ones already on
+        // the participants list, add the rest via the silent API path. Guarded
+        // per screen so a refresh after success doesn't re-fire.
+        // Delayed so the participants list has time to render — without that,
+        // every @-mention looks "new" and we'd duplicate.
+        function scheduleSilentAutoLink(buttonForDisabledState) {
             setTimeout(function() {
                 try {
                     const screenInfo = getCurrentScreenInfo();
@@ -3602,23 +3606,22 @@
                     const ids = collectAutoLinkIds();
                     if (ids.length === 0) return;
 
-                    const container = button.closest('habitat-fieldset') || document;
+                    const editBtn = document.querySelector('habitat-fieldset > habitat-button[slot="button"]');
+                    const container = (editBtn && editBtn.closest('habitat-fieldset')) || document;
                     const existing = getExistingParticipants(container);
                     const newIds = ids.filter(function(id) { return !isAlreadyParticipant(id, existing); });
                     if (newIds.length === 0) {
-                        autoLinkFiredForScreen = screenKey; // nothing to do, but mark as handled
+                        autoLinkFiredForScreen = screenKey;
                         return;
                     }
 
                     autoLinkFiredForScreen = screenKey;
                     console.log('[QuickAddParticipants] Silent auto-link: ' + newIds.length + ' new participant(s)');
-                    addLinkedParticipants(newIds, button, { silent: true });
+                    addLinkedParticipants(newIds, buttonForDisabledState || null, { silent: true });
                 } catch (err) {
                     console.error('[QuickAddParticipants] Silent auto-link failed:', err);
                 }
             }, 1200);
-
-            return true;
         }
 
         function removeAutoLinkButton() {
@@ -4051,20 +4054,23 @@
                             setTimeout(() => { insertSearchBar(); insertAutoAddButton(); }, 1000);
                         }
 
-                        if (currentUrl.includes('dutyrounds:') || currentUrl.includes('incident:')) {
-                            insertAutoLinkButton();
-                        }
-
+                        // Incidents keep the manual button (lets the user re-fire
+                        // with a toast for feedback). Duty rounds is fully silent
+                        // and automatic — no button, the auto-link just happens.
                         if (currentUrl.includes('incident:')) {
+                            insertAutoLinkButton();
                             insertAutoAddButton();
+                        } else if (currentUrl.includes('dutyrounds:')) {
+                            removeAutoLinkButton();
+                            scheduleSilentAutoLink(null);
                         }
                     } catch (error) {
                         console.error('[QuickAddParticipants] Error in checkAndInsert:', error);
                     }
                 }
 
-                // Initial insertion
-                setTimeout(insertAutoLinkButton, 1500);
+                // Initial pass
+                setTimeout(checkAndInsert, 1500);
                 checkAndInsert();
 
                 setInterval(checkAndInsert, 2000);
