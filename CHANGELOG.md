@@ -15,6 +15,7 @@ All notable changes to StarWrench will be documented in this file.
 - Quick Add Participants: Auto Link Participants button now silently auto-fires once when it loads on a Duty Rounds or Incident screen — adds any @-mentioned residents not already participants without any toast or popup. Clicking the button manually still shows success/failure toasts as before.
 - Resident picker now inserts `INITIALS @id` on first mention and just `INITIALS` on subsequent mentions of the same resident in the same textarea, keeping reports readable for people without the plugin while still anchoring once for click/lookup. Initials use the first letter of every space-separated name part (preferred + last).
 - Rendered @-mention links are now `user-select: none`, so when plugin users copy a report the resident's full name is excluded from the clipboard — what gets pasted matches the initials-only view non-plugin readers see.
+- Console utility `window.starWrenchInjectInitials(text)` for retrofitting old records: takes a block of text containing raw `@id` mentions, returns the same text rewritten in the picker's `INITIALS @id` + bare `INITIALS` repeat format. Idempotent on already-prefixed input. Use with `copy(starWrenchInjectInitials(...))` in the browser console to paste the result back.
 - Quick Incident Participants plugin now fully functional - can add residents to incidents via StarRez API
 - Proper StarRez API integration using `starrez.sm.GetCurrentlyDisplayedScreenID()` for incident ID detection
 
