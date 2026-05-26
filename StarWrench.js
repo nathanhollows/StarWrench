@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.16.2
+// @version      1.16.3
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.16.2';
+    const SUITE_VERSION = '1.16.3';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2042,21 +2042,43 @@
             });
         }
 
+        function waitForPageFocus(timeoutMs) {
+            if (document.hasFocus()) return Promise.resolve(true);
+            return new Promise(function(resolve) {
+                var timer = setTimeout(function() {
+                    window.removeEventListener('focus', onFocus);
+                    resolve(document.hasFocus());
+                }, timeoutMs);
+                function onFocus() {
+                    clearTimeout(timer);
+                    window.removeEventListener('focus', onFocus);
+                    resolve(true);
+                }
+                window.addEventListener('focus', onFocus);
+            });
+        }
+
         async function injectInitialsFromClipboard() {
             if (!navigator.clipboard || !navigator.clipboard.readText) {
                 console.error('[StarWrench] Clipboard API unavailable. Pass text directly: starWrenchInjectInitials(`...`)');
                 return;
             }
+            // Clipboard.readText() needs document focus. Running from DevTools
+            // means the console has focus, not the page — wait briefly for the
+            // user to click into the page rather than failing instantly.
             if (!document.hasFocus()) {
-                console.warn('[StarWrench] Document is not focused — click anywhere on the page, then re-run.');
-                return;
+                console.log('[StarWrench] Click anywhere on the page within 5s…');
+                var gotFocus = await waitForPageFocus(5000);
+                if (!gotFocus) {
+                    console.error('[StarWrench] Page never got focus. Click into the page first, then re-run.');
+                    return;
+                }
             }
             var input;
             try {
                 input = await navigator.clipboard.readText();
             } catch (err) {
                 console.error('[StarWrench] Clipboard read failed:', err && err.message ? err.message : err);
-                console.error('[StarWrench] Tip: click anywhere on the page first so the document has focus, then re-run.');
                 return;
             }
             var output = injectInitialsTransform(input);
