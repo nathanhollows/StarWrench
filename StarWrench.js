@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.17.0
+// @version      1.17.1
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.17.0';
+    const SUITE_VERSION = '1.17.1';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1056,7 +1056,7 @@
 
             const input = document.createElement('input');
             input.type = 'text';
-            input.placeholder = 'Search dashboard';
+            input.placeholder = 'Search dashboard  (Ctrl+K)';
             input.className = 'sw-dashboard-search-input';
             input.setAttribute('aria-label', 'Search dashboard rows');
             input.style.cssText = 'width: 100%; padding: 0.5em 2.2em 0.5em 2.2em; border-radius: 999px; border: 1px solid #cfd6e0; background: #fff; font-size: 0.95em; outline: none; box-shadow: 0 1px 2px rgba(0,0,0,0.04); transition: border-color 0.15s, box-shadow 0.15s; box-sizing: border-box;';
@@ -1178,6 +1178,17 @@
         // nothing hidden, no matter what was in the search bar before.
         window.addEventListener('hashchange', resetDashboardSearchState);
         window.addEventListener('popstate', resetDashboardSearchState);
+
+        // Ctrl+K focuses the dashboard search bar from anywhere on the dashboard
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'k') {
+                const dashInput = document.querySelector('.sw-dashboard-search-input');
+                if (!dashInput) return;
+                e.preventDefault();
+                dashInput.focus();
+                dashInput.select();
+            }
+        });
     }
 
     // INITIALS HIGHLIGHTER PLUGIN
