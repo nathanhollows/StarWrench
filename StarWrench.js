@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.16.4
+// @version      1.17.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,17 +19,12 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.16.4';
+    const SUITE_VERSION = '1.17.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
     const DEFAULT_SETTINGS = {
         plugins: {
-            bookmarks: {
-                enabled: true,
-                name: '📖 Bookmarks',
-                description: 'Save and organise frequently visited pages with drag-and-drop management'
-            },
             autoSelect: {
                 enabled: true,
                 name: '🎯 Auto-Select',
@@ -290,199 +285,6 @@
     // ================================
     // PLUGIN IMPLEMENTATIONS
     // ================================
-
-    // BOOKMARKS PLUGIN
-    function initBookmarksPlugin() {
-        const BOOKMARKS_KEY = 'starrezBookmarks';
-
-        const loadBookmarks = () => JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '[]');
-        const saveBookmarks = (bookmarks) => localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
-
-        const parseUrl = (url) => {
-            const urlObj = new URL(url);
-            const hash = urlObj.hash;
-            const pathParts = urlObj.pathname.split('/').filter(p => p);
-
-            if (hash && hash.startsWith('#!')) {
-                return { type: 'shortcode', shortcode: hash.substring(2) };
-            }
-
-            return {
-                type: 'module',
-                module: pathParts[1] || '',
-                submodule: pathParts[2] || ''
-            };
-        };
-
-        const navigateToBookmark = (url) => {
-            const navInfo = parseUrl(url);
-
-            if (navInfo.type === 'shortcode') {
-                starrez.sm.NavigateTo(`#!${navInfo.shortcode}`);
-            } else {
-                if (window.location.hash && window.location.hash.startsWith('#!')) {
-                    starrez.sm.CloseAllDetailScreens().done(() => {
-                        starrez.mm.NavigateTo(navInfo.module, navInfo.submodule);
-                    });
-                } else {
-                    starrez.mm.NavigateTo(navInfo.module, navInfo.submodule);
-                }
-            }
-        };
-
-        const createDropdown = (container, bookmarks) => {
-            let dropdown = document.getElementById('bookmarks-dropdown');
-            if (dropdown) {
-                dropdown.remove();
-                return;
-            }
-
-            dropdown = document.createElement('div');
-            dropdown.id = 'bookmarks-dropdown';
-            dropdown.style.cssText = `
-                position: absolute; top: 50px; right: 10px; z-index: 99999;
-                background: #fff; border: 1px solid #ccc; padding: 10px; width: 400px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-family: Arial, sans-serif;
-                max-height: 400px; overflow-y: auto; border-radius: 8px;
-            `;
-
-            const list = document.createElement('ul');
-            list.style.cssText = 'list-style: none; padding: 0; margin: 0;';
-
-            bookmarks.forEach((bm, index) => {
-                const li = document.createElement('li');
-                li.style.cssText = 'margin-bottom: 10px; display: flex; align-items: center; gap: 5px;';
-                li.draggable = true;
-                li.dataset.index = index;
-
-                // Drag functionality
-                li.addEventListener('dragstart', (e) => {
-                    e.dataTransfer.setData('text/plain', index);
-                    li.style.opacity = '0.5';
-                });
-                li.addEventListener('dragend', () => li.style.opacity = '1');
-                li.addEventListener('dragover', (e) => e.preventDefault());
-                li.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
-                    const toIndex = parseInt(li.dataset.index);
-                    if (fromIndex !== toIndex) {
-                        const [movedItem] = bookmarks.splice(fromIndex, 1);
-                        bookmarks.splice(toIndex, 0, movedItem);
-                        saveBookmarks(bookmarks);
-                        createDropdown(container, bookmarks);
-                    }
-                });
-
-                // Drag handle
-                const dragHandle = document.createElement('span');
-                dragHandle.textContent = '☰';
-                dragHandle.style.cssText = 'cursor: grab; font-size: 18px; color: #666; user-select: none;';
-                dragHandle.title = 'Drag to reorder';
-
-                // Bookmark link
-                const link = document.createElement('a');
-                link.href = '#';
-                link.textContent = bm.name;
-                link.style.cssText = 'color: #0077cc; text-decoration: none; cursor: pointer; flex: 1; user-select: none;';
-
-                const handleNavigation = (e) => {
-                    e.preventDefault();
-                    navigateToBookmark(bm.url);
-                    dropdown.remove();
-                };
-                link.addEventListener('click', handleNavigation);
-
-                // Edit button
-                const editBtn = document.createElement('button');
-                editBtn.textContent = '✏️';
-                editBtn.style.cssText = 'background: none; border: none; cursor: pointer; font-size: 16px;';
-                editBtn.onclick = () => {
-                    link.removeEventListener('click', handleNavigation);
-                    link.contentEditable = 'true';
-                    link.style.outline = '1px solid #0077cc';
-                    link.focus();
-                    editBtn.style.display = 'none';
-                    acceptBtn.style.display = 'inline';
-                };
-
-                // Accept button
-                const acceptBtn = document.createElement('button');
-                acceptBtn.textContent = '✓';
-                acceptBtn.style.cssText = 'background: none; border: none; cursor: pointer; font-size: 16px; color: #28a745; display: none;';
-                acceptBtn.onclick = () => {
-                    const newName = link.textContent.trim();
-                    if (newName) {
-                        bookmarks[index].name = newName;
-                        saveBookmarks(bookmarks);
-                    }
-                    link.contentEditable = 'false';
-                    link.style.outline = 'none';
-                    link.addEventListener('click', handleNavigation);
-                    editBtn.style.display = 'inline';
-                    acceptBtn.style.display = 'none';
-                };
-
-                // Delete button
-                const delBtn = document.createElement('button');
-                delBtn.textContent = '🗑️';
-                delBtn.style.cssText = 'background: none; border: none; cursor: pointer; font-size: 16px;';
-                delBtn.onclick = () => {
-                    bookmarks.splice(index, 1);
-                    saveBookmarks(bookmarks);
-                    createDropdown(container, bookmarks);
-                };
-
-                li.append(dragHandle, link, editBtn, acceptBtn, delBtn);
-                list.appendChild(li);
-            });
-
-            const addBtn = document.createElement('button');
-            addBtn.textContent = 'Add Current Page';
-            addBtn.style.cssText = 'margin-top: 10px; padding: 8px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;';
-            addBtn.onclick = () => {
-                bookmarks.push({
-                    name: document.title || 'Untitled',
-                    url: window.location.href
-                });
-                saveBookmarks(bookmarks);
-                createDropdown(container, bookmarks);
-            };
-
-            dropdown.append(list, addBtn);
-            document.body.appendChild(dropdown);
-
-            // Close dropdown when clicking outside
-            setTimeout(() => {
-                const closeOnClickOutside = (e) => {
-                    if (!dropdown.contains(e.target)) {
-                        dropdown.remove();
-                        document.removeEventListener('click', closeOnClickOutside);
-                    }
-                };
-                document.addEventListener('click', closeOnClickOutside);
-            }, 100);
-        };
-
-        // Add bookmarks button
-        setTimeout(() => {
-            const container = document.querySelector('.habitat-siteheading-buttons');
-            if (container && !document.querySelector('#bookmarks-button')) {
-                const newButton = document.createElement('habitat-header-button');
-                newButton.setAttribute('aria-label', 'Bookmarks');
-                newButton.setAttribute('tooltip', 'Bookmarks');
-                newButton.setAttribute('id', 'bookmarks-button');
-                newButton.setAttribute('icon', 'fa-bookmark');
-
-                newButton.addEventListener('click', () => {
-                    createDropdown(container, loadBookmarks());
-                });
-
-                const thirdButton = container.children[2] || container.children[1];
-                container.insertBefore(newButton, thirdButton);
-            }
-        }, 1200);
-    }
 
     // AUTO-SELECT PLUGIN
     // Uses StarRez's ToggleDirectorySelection API to select records server-side,
@@ -2613,6 +2415,79 @@
                     color: var(--color-grey-g70, #555);
                 }
 
+                .starwrench-instant-search-result.drag-over {
+                    border-top: 2px solid var(--color-blue-b60, #0066cc);
+                }
+
+                .starwrench-bookmark-icon {
+                    color: var(--color-blue-b60, #0066cc);
+                    font-size: 13px;
+                    flex-shrink: 0;
+                    width: 16px;
+                    text-align: center;
+                }
+
+                .starwrench-bookmark-icon.draggable {
+                    cursor: grab;
+                    user-select: none;
+                }
+
+                .starwrench-bookmark-actions {
+                    display: flex;
+                    gap: 2px;
+                    align-items: center;
+                    flex-shrink: 0;
+                    opacity: 0;
+                    transition: opacity 0.15s;
+                }
+
+                .starwrench-instant-search-result:hover .starwrench-bookmark-actions,
+                .starwrench-instant-search-result.selected .starwrench-bookmark-actions {
+                    opacity: 1;
+                }
+
+                .starwrench-bookmark-action-btn {
+                    background: none;
+                    border: none;
+                    cursor: pointer;
+                    color: var(--color-grey-g70, #555);
+                    padding: 4px 5px;
+                    font-size: 12px;
+                    line-height: 1;
+                    border-radius: 3px;
+                    transition: color 0.15s, background 0.15s;
+                }
+
+                .starwrench-bookmark-action-btn:hover {
+                    color: var(--color-grey-g90, #222);
+                    background: var(--color-grey-g20, #e8e8e8);
+                }
+
+                .starwrench-bookmark-action-btn.delete-confirming {
+                    color: var(--color-red-r60, #cc2200);
+                }
+
+                .starwrench-add-bookmark-btn {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    width: 100%;
+                    padding: 10px 20px;
+                    background: none;
+                    border: none;
+                    border-top: 1px solid var(--color-grey-g20, #f0f0f0);
+                    cursor: pointer;
+                    color: var(--color-grey-g60, #666);
+                    font-size: 13px;
+                    text-align: left;
+                    transition: background 0.1s, color 0.1s;
+                }
+
+                .starwrench-add-bookmark-btn:hover {
+                    background: var(--color-blue-b20, #e6f2ff);
+                    color: var(--color-blue-b60, #0066cc);
+                }
+
                 .starwrench-instant-search-empty ol {
                     text-align: left;
                     max-width: 400px;
@@ -2706,6 +2581,23 @@
                 }
             }
 
+            // Save bookmarks to localStorage
+            function saveBookmarks(bookmarks) {
+                localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+            }
+
+            // Populate default bookmarks on first install (null = never set, [] = user cleared)
+            if (localStorage.getItem(BOOKMARKS_KEY) === null) {
+                saveBookmarks([
+                    { name: 'Duty Rounds', url: 'https://vuw.starrezhousing.com/StarRezWeb/campuslife/dutyroundsdirectory' },
+                    { name: 'Incidents and Shift Reports', url: 'https://vuw.starrezhousing.com/StarRezWeb/campuslife/incidentdirectory' },
+                    { name: 'Events', url: 'https://vuw.starrezhousing.com/StarRezWeb/CampusLife/programdirectory' },
+                    { name: 'Maintenance', url: 'https://vuw.starrezhousing.com/StarRezWeb/rooms/maintenance' },
+                    { name: 'Occupancy Graph', url: 'https://vuw.starrezhousing.com/StarRezWeb/main/occupancygraph' },
+                    { name: 'Report Generator (V2)', url: 'https://vuw.starrezhousing.com/StarRezWeb/reports/reportgeneratorreact' },
+                ]);
+            }
+
             // Parse URL to determine navigation type (same as bookmarks plugin)
             function parseUrl(url) {
                 const urlObj = new URL(url);
@@ -2788,20 +2680,54 @@
             }
 
             // Create bookmark item
-            function createBookmarkItem(bookmark, index) {
+            function createBookmarkItem(bookmark, index, isDraggable) {
                 const item = document.createElement('div');
                 item.className = 'starwrench-instant-search-result';
                 item.dataset.index = index;
                 item.dataset.url = bookmark.url;
+                item.style.cssText = 'display: flex; align-items: center; gap: 12px;';
 
-                item.innerHTML = `
-                    <div style="font-weight: 600; color: var(--color-grey-g90, #333); font-size: 14px; line-height: 1.3;">
-                        ${bookmark.name}
-                    </div>
-                    <div style="font-size: 11px; color: var(--color-grey-g60, #666); line-height: 1.3;">
-                        ${bookmark.url}
-                    </div>
-                `;
+                const icon = document.createElement('div');
+                icon.className = 'starwrench-bookmark-icon' + (isDraggable ? ' draggable' : '');
+                icon.innerHTML = '<i class="fa fa-bookmark"></i>';
+                if (isDraggable) {
+                    icon.title = 'Drag to reorder';
+                }
+
+                const content = document.createElement('div');
+                content.style.cssText = 'min-width: 0; flex: 1;';
+
+                const nameDiv = document.createElement('div');
+                nameDiv.style.cssText = 'font-weight: 600; color: var(--color-grey-g90, #333); font-size: 14px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+                nameDiv.textContent = bookmark.name;
+
+                const urlDiv = document.createElement('div');
+                urlDiv.style.cssText = 'font-size: 11px; color: var(--color-grey-g60, #666); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+                urlDiv.textContent = bookmark.url;
+
+                content.appendChild(nameDiv);
+                content.appendChild(urlDiv);
+
+                // Action buttons
+                const actions = document.createElement('div');
+                actions.className = 'starwrench-bookmark-actions';
+
+                const editBtn = document.createElement('button');
+                editBtn.className = 'starwrench-bookmark-action-btn';
+                editBtn.innerHTML = '<i class="fa fa-pencil"></i>';
+                editBtn.title = 'Rename bookmark';
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'starwrench-bookmark-action-btn';
+                deleteBtn.innerHTML = '<i class="fa fa-trash"></i>';
+                deleteBtn.title = 'Delete bookmark (click twice to confirm)';
+
+                actions.appendChild(editBtn);
+                actions.appendChild(deleteBtn);
+
+                item.appendChild(icon);
+                item.appendChild(content);
+                item.appendChild(actions);
 
                 item.addEventListener('click', () => {
                     navigateToUrl(bookmark.url);
@@ -2810,6 +2736,125 @@
                 item.addEventListener('mouseenter', () => {
                     setSelectedIndex(index);
                 });
+
+                // Edit (rename)
+                editBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+                editBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    let editDone = false;
+
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.value = bookmark.name;
+                    input.style.cssText = 'font-weight: 600; font-size: 14px; color: var(--color-grey-g90, #333); border: none; border-bottom: 1px solid var(--color-blue-b60, #0066cc); outline: none; width: 100%; background: transparent; padding: 0; line-height: 1.3;';
+
+                    nameDiv.replaceWith(input);
+                    actions.style.visibility = 'hidden';
+                    input.focus();
+                    input.select();
+
+                    const finalize = (shouldSave) => {
+                        if (editDone) return;
+                        editDone = true;
+
+                        if (shouldSave) {
+                            const newName = input.value.trim();
+                            if (newName && newName !== bookmark.name) {
+                                const allBookmarks = loadBookmarks();
+                                const bmIdx = allBookmarks.findIndex(bm => bm.url === bookmark.url);
+                                if (bmIdx !== -1) {
+                                    allBookmarks[bmIdx].name = newName;
+                                    saveBookmarks(allBookmarks);
+                                    bookmark.name = newName;
+                                }
+                            }
+                        }
+
+                        nameDiv.textContent = bookmark.name;
+                        input.replaceWith(nameDiv);
+                        actions.style.visibility = '';
+                    };
+
+                    input.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); finalize(true); }
+                        if (e.key === 'Escape') { e.preventDefault(); finalize(false); }
+                        e.stopPropagation();
+                    });
+
+                    input.addEventListener('blur', () => finalize(false));
+                });
+
+                // Delete (double-click to confirm)
+                let deleteConfirming = false;
+                let deleteResetTimer = null;
+
+                deleteBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+                deleteBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (!deleteConfirming) {
+                        deleteConfirming = true;
+                        deleteBtn.classList.add('delete-confirming');
+                        deleteResetTimer = setTimeout(() => {
+                            deleteConfirming = false;
+                            deleteBtn.classList.remove('delete-confirming');
+                        }, 3000);
+                    } else {
+                        clearTimeout(deleteResetTimer);
+                        const allBookmarks = loadBookmarks();
+                        const bmIdx = allBookmarks.findIndex(bm => bm.url === bookmark.url);
+                        if (bmIdx !== -1) {
+                            allBookmarks.splice(bmIdx, 1);
+                            saveBookmarks(allBookmarks);
+                        }
+                        if (isDraggable) {
+                            showBookmarks();
+                        } else {
+                            item.remove();
+                            currentResults = currentResults.filter(r => r.url !== bookmark.url);
+                        }
+                    }
+                });
+
+                if (isDraggable) {
+                    icon.addEventListener('mousedown', () => {
+                        item.draggable = true;
+                    });
+
+                    item.addEventListener('dragstart', (e) => {
+                        e.dataTransfer.setData('text/plain', String(index));
+                        setTimeout(() => { item.style.opacity = '0.4'; }, 0);
+                    });
+
+                    item.addEventListener('dragend', () => {
+                        item.draggable = false;
+                        item.style.opacity = '1';
+                    });
+
+                    item.addEventListener('dragover', (e) => {
+                        e.preventDefault();
+                        item.classList.add('drag-over');
+                    });
+
+                    item.addEventListener('dragleave', (e) => {
+                        if (!item.contains(e.relatedTarget)) {
+                            item.classList.remove('drag-over');
+                        }
+                    });
+
+                    item.addEventListener('drop', (e) => {
+                        e.preventDefault();
+                        item.classList.remove('drag-over');
+                        const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+                        const toIndex = index;
+                        if (fromIndex !== toIndex) {
+                            const allBookmarks = loadBookmarks();
+                            const [moved] = allBookmarks.splice(fromIndex, 1);
+                            allBookmarks.splice(toIndex, 0, moved);
+                            saveBookmarks(allBookmarks);
+                            showBookmarks();
+                        }
+                    });
+                }
 
                 return item;
             }
@@ -2870,16 +2915,29 @@
                     resultsContainer.innerHTML = `
                         <div class="starwrench-instant-search-empty">
                             <h3>No bookmarks</h3>
-                            <p>Create bookmarks by clicking the bookmark icon in the header</p>
+                            <p>Use the <strong>Add current page</strong> button below to save your first bookmark</p>
                         </div>
                     `;
-                    return;
+                } else {
+                    bookmarks.forEach((bookmark, index) => {
+                        const item = createBookmarkItem(bookmark, index, true);
+                        resultsContainer.appendChild(item);
+                    });
                 }
 
-                bookmarks.forEach((bookmark, index) => {
-                    const item = createBookmarkItem(bookmark, index);
-                    resultsContainer.appendChild(item);
+                const addBtn = document.createElement('button');
+                addBtn.className = 'starwrench-add-bookmark-btn';
+                addBtn.innerHTML = '<i class="fa fa-plus"></i> Add current page';
+                addBtn.addEventListener('click', () => {
+                    const allBookmarks = loadBookmarks();
+                    allBookmarks.push({
+                        name: document.title || 'Untitled',
+                        url: window.location.href,
+                    });
+                    saveBookmarks(allBookmarks);
+                    showBookmarks();
                 });
+                resultsContainer.appendChild(addBtn);
             }
 
             // Show empty state for search
@@ -2911,22 +2969,34 @@
                 resultsContainer.classList.add('visible');
             }
 
-            // Show search results
-            function showSearchResults(results) {
-                currentResults = results;
-                selectedIndex = -1;
+            // Show search results (bookmarks first, then residents)
+            function showSearchResults(bookmarkResults, residentResults) {
+                const maxResults = 20;
+                const bookmarkSlice = bookmarkResults.slice(0, maxResults);
+                const residentSlice = residentResults.slice(0, maxResults - bookmarkSlice.length);
+                const combined = [...bookmarkSlice, ...residentSlice];
+
+                currentResults = combined;
                 resultsContainer.innerHTML = '';
                 resultsContainer.classList.add('visible');
 
-                if (results.length === 0) {
+                if (combined.length === 0) {
+                    selectedIndex = -1;
                     showEmptyState();
                     return;
                 }
 
-                results.slice(0, 20).forEach((resident, index) => {
-                    const item = createResidentItem(resident, index);
+                bookmarkSlice.forEach((bookmark, index) => {
+                    const item = createBookmarkItem(bookmark, index, false);
                     resultsContainer.appendChild(item);
                 });
+
+                residentSlice.forEach((resident, index) => {
+                    const item = createResidentItem(resident, bookmarkSlice.length + index);
+                    resultsContainer.appendChild(item);
+                });
+
+                setSelectedIndex(0);
             }
 
             // Handle search
@@ -2946,14 +3016,23 @@
                 }
 
                 searchTimeout = setTimeout(() => {
-                    if (!window.starWrenchResidentDB) {
-                        showEmptyState();
-                        return;
+                    const trimmedQuery = query.trim().toLowerCase();
+
+                    // Search bookmarks
+                    const bookmarks = loadBookmarks();
+                    const matchingBookmarks = bookmarks.filter(bm =>
+                        bm.name.toLowerCase().includes(trimmedQuery) ||
+                        bm.url.toLowerCase().includes(trimmedQuery)
+                    );
+
+                    // Search residents
+                    let residentResults = [];
+                    if (window.starWrenchResidentDB) {
+                        const searchCurrentOnly = currentMode === SEARCH_MODE_CURRENT;
+                        residentResults = window.starWrenchResidentDB.search(query.trim(), searchCurrentOnly);
                     }
 
-                    const searchCurrentOnly = currentMode === SEARCH_MODE_CURRENT;
-                    const results = window.starWrenchResidentDB.search(query.trim(), searchCurrentOnly);
-                    showSearchResults(results);
+                    showSearchResults(matchingBookmarks, residentResults);
                 }, 150);
             }
 
@@ -4904,9 +4983,6 @@
         if (!isPluginEnabled(pluginName)) return;
 
         switch (pluginName) {
-            case 'bookmarks':
-                initBookmarksPlugin();
-                break;
             case 'autoSelect':
                 initAutoSelectPlugin();
                 break;
