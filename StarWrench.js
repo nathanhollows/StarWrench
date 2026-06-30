@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.17.1
+// @version      1.17.2
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.17.1';
+    const SUITE_VERSION = '1.17.2';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2296,10 +2296,15 @@
                 #habitat-site-header .habitat-siteheading-bar #starwrench-search-hint {
                     margin-left: auto;
                     margin-right: 0;
-                    font-size: 13px;
-                    color: var(--color-grey-g60, #666);
                     white-space: nowrap;
                     flex-shrink: 1;
+                    border: 1px solid rgb(151, 207, 255);
+                }
+
+                #habitat-site-header .habitat-siteheading-bar #starwrench-search-hint:hover {
+                    background-color: rgb(210, 235, 255);
+                    border-color: rgb(0, 117, 219);
+                    box-shadow: 0 2px 6px rgba(0, 117, 219, 0.2);
                 }
 
                 #starwrench-instant-search-modal {
@@ -2537,7 +2542,7 @@
             searchInput = document.createElement('input');
             searchInput.id = 'starwrench-instant-search-input';
             searchInput.type = 'text';
-            searchInput.placeholder = 'Search residents...';
+            searchInput.placeholder = 'Search residents and bookmarks...';
             searchInput.setAttribute('autocomplete', 'off');
 
             // Tabs for mode switching
@@ -2673,7 +2678,7 @@
 
                 // Update placeholder
                 if (newMode === SEARCH_MODE_BOOKMARKS) {
-                    searchInput.placeholder = 'Search residents...';
+                    searchInput.placeholder = 'Search residents and bookmarks...';
                 } else if (newMode === SEARCH_MODE_CURRENT) {
                     searchInput.placeholder = 'Search current residents...';
                 } else {
@@ -3232,29 +3237,56 @@
             }
 
             if (originalSearch) {
-                // Full-access path: insert hint text next to the native search bar
-                const hintContainer = document.createElement('span');
-                hintContainer.id = 'starwrench-search-hint';
+                // Full-access path: insert button next to the native search bar
+                const btn = document.createElement('button');
+                btn.id = 'starwrench-search-hint';
+                btn.type = 'button';
+                btn.setAttribute('aria-label', 'Lookup');
+                btn.style.cssText = `
+                    font-family: Roboto, Arial, Helvetica, sans-serif;
+                    align-items: center;
+                    border-style: solid;
+                    border-radius: 5px;
+                    box-sizing: border-box;
+                    cursor: pointer;
+                    display: inline-flex;
+                    justify-content: center;
+                    transition: 0.15s ease-in-out;
+                    vertical-align: top;
+                    white-space: nowrap;
+                    background-color: rgb(235, 246, 255);
+                    height: 32px;
+                    padding: 0 8px;
+                    letter-spacing: 0.4px;
+                    font-size: 14px;
+                    font-weight: bold;
+                    color: rgb(0, 117, 219);
+                    margin-right: 8px;
+                `;
 
                 const kbdElement = document.createElement('kbd');
                 kbdElement.textContent = '/';
                 kbdElement.style.cssText = `
-                    background: var(--color-grey-g20, #f0f0f0);
-                    border: 1px solid var(--color-grey-g30, #ccc);
+                    background: rgba(0, 117, 219, 0.12);
+                    border: 1px solid rgba(0, 117, 219, 0.3);
                     border-radius: 3px;
-                    padding: 2px 6px;
+                    padding: 1px 5px;
                     font-size: 11px;
                     font-family: monospace;
-                    color: var(--color-grey-g60, #666);
+                    color: rgb(0, 117, 219);
                     line-height: 1;
-                    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-                    margin-right: 4px;
+                    margin-left: 6px;
                 `;
 
-                hintContainer.appendChild(document.createTextNode('type '));
-                hintContainer.appendChild(kbdElement);
-                hintContainer.appendChild(document.createTextNode('for quick access'));
-                originalSearch.parentNode.insertBefore(hintContainer, originalSearch);
+                const iconElement = document.createElement('i');
+                iconElement.className = 'fa fa-search';
+                iconElement.setAttribute('aria-hidden', 'true');
+                iconElement.style.margin = '0 6px 0 2px';
+                btn.appendChild(iconElement);
+                btn.appendChild(document.createTextNode('Lookup'));
+                btn.appendChild(kbdElement);
+                btn.addEventListener('click', function() { instantSearch.openModal(); });
+                originalSearch.parentNode.insertBefore(btn, originalSearch);
                 return true;
             }
 
@@ -3266,24 +3298,52 @@
 
             const btn = document.createElement('button');
             btn.id = 'starwrench-search-hint';
-            btn.title = 'Quick search (/)';
-            btn.setAttribute('aria-label', 'Quick search');
+            btn.type = 'button';
+            btn.setAttribute('aria-label', 'Lookup');
             btn.style.cssText = `
-                background: none;
-                border: none;
-                cursor: pointer;
-                padding: 0 8px;
-                height: 100%;
-                display: flex;
+                font-family: Roboto, Arial, Helvetica, sans-serif;
                 align-items: center;
-                color: var(--color-grey-g60, #666);
-                font-size: 16px;
-                opacity: 0.75;
-                transition: opacity 0.15s;
+                border-style: solid;
+                border-radius: 5px;
+                box-sizing: border-box;
+                cursor: pointer;
+                display: inline-flex;
+                justify-content: center;
+                transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+                vertical-align: top;
+                white-space: nowrap;
+                background-color: rgb(235, 246, 255);
+                height: 32px;
+                padding: 0 8px;
+                letter-spacing: 0.4px;
+                font-size: 14px;
+                font-weight: bold;
+                color: rgb(0, 117, 219);
+                margin-right: 8px;
             `;
-            btn.innerHTML = '<i class="fa fa-magnifying-glass" aria-hidden="true"></i>';
-            btn.addEventListener('mouseover', function() { btn.style.opacity = '1'; });
-            btn.addEventListener('mouseout', function() { btn.style.opacity = '0.75'; });
+
+            const iconElement = document.createElement('i');
+            iconElement.className = 'fa fa-search';
+            iconElement.setAttribute('aria-hidden', 'true');
+            iconElement.style.margin = '0 6px 0 2px';
+
+            const kbdElement = document.createElement('kbd');
+            kbdElement.textContent = '/';
+            kbdElement.style.cssText = `
+                background: rgba(0, 117, 219, 0.12);
+                border: 1px solid rgba(0, 117, 219, 0.3);
+                border-radius: 3px;
+                padding: 1px 5px;
+                font-size: 11px;
+                font-family: monospace;
+                color: rgb(0, 117, 219);
+                line-height: 1;
+                margin-left: 6px;
+            `;
+
+            btn.appendChild(iconElement);
+            btn.appendChild(document.createTextNode('Lookup'));
+            btn.appendChild(kbdElement);
             btn.addEventListener('click', function() { instantSearch.openModal(); });
 
             buttonsBar.parentNode.insertBefore(btn, buttonsBar);
