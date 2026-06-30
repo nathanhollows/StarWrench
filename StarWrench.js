@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.17.2
+// @version      1.17.3
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.17.2';
+    const SUITE_VERSION = '1.17.3';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1261,6 +1261,14 @@
                 if (tagName === 'input' || tagName === 'select' || tagName === 'textarea') return true;
                 if (parent.classList && parent.classList.contains('initials-highlight')) return true;
                 parent = parent.parentNode;
+            }
+            // Don't expand initials that immediately precede an auto-linked @mention —
+            // the link itself already shows the full name
+            const nextSib = node.nextSibling;
+            if (nextSib && nextSib.nodeType === Node.ELEMENT_NODE &&
+                nextSib.getAttribute && nextSib.getAttribute('data-sw-at-link') === 'true' &&
+                /\b[A-Z]{2,4}\.?\s*$/.test(node.textContent)) {
+                return true;
             }
             return false;
         }
