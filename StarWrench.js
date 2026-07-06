@@ -3444,11 +3444,17 @@
                     return match ? { id: match[1], type: 'dutyrounds' } : null;
                 }
 
+                if (hash && hash.includes('program:') && hash.includes(':attendees')) {
+                    // The new Habitat-based Attendees UI isn't tracked as a "screen" by
+                    // starrez.sm, so GetCurrentlyDisplayedScreenID() throws here. Pull the
+                    // program ID straight out of the hash instead, e.g. program:2566:attendees
+                    const match = hash.match(/program:(\d+):attendees/);
+                    return match ? { id: match[1], type: 'program' } : null;
+                }
+
                 let pageType = null;
                 if (hash && hash.includes('incident:')) {
                     pageType = 'incident';
-                } else if (hash && hash.includes('program:') && hash.includes(':attendees')) {
-                    pageType = 'program';
                 } else {
                     return null;
                 }
@@ -3494,6 +3500,19 @@
                 searchInput.placeholder = 'Adding participant...';
                 searchInput.style.opacity = '0.6';
             }
+
+            // Safety net: StarRez's own error handling (RejectOnFail defaults to false)
+            // can swallow the request's promise entirely when it shows its own
+            // data-rule-violation popup, leaving our .fail/.always never called and the
+            // search input stuck disabled. Force it back on after a few seconds regardless.
+            const reEnableSearchInput = () => {
+                if (searchInput) {
+                    searchInput.disabled = false;
+                    searchInput.placeholder = screenInfo.type === 'program' ? 'Add attendee...' : 'Add participant...';
+                    searchInput.style.opacity = '1';
+                }
+            };
+            const stuckInputTimeout = setTimeout(reEnableSearchInput, 1000);
 
             var call;
             var entryIdStr = entryId.toString();
@@ -3560,7 +3579,11 @@
             }
 
             call.Request({
-                ShowLoading: true
+                ShowLoading: true,
+                // Without this, StarRez's own error handler can absorb data-rule-violation
+                // responses (e.g. "already an attendee") and never settle our promise at
+                // all, leaving the .fail/.always below unreachable.
+                RejectOnFail: true
             }).done(function(response) {
                 console.log(`[QuickAddParticipants] Successfully added participant: ${displayName} to ${screenInfo.type}`);
 
@@ -3587,8 +3610,25 @@
 
                 const contextName = screenInfo.type === 'incident' ? 'incident' : 'program';
 
-                // Check if this is a data rule violation (duplicate participant)
-                if (jqXHR.responseText && jqXHR.responseText.includes('HandleDataRuleViolation')) {
+                // Check if this is a data rule violation (e.g. duplicate participant).
+                // StarRez reports these two different ways depending on endpoint: an
+                // inline "HandleDataRuleViolation" popup call, or a raw JSON array of
+                // rule objects like [{ "type": "ExclusiveDataError", "rulename": "..." }].
+                let isDataRuleViolation = jqXHR.responseText && jqXHR.responseText.includes('HandleDataRuleViolation');
+
+                if (!isDataRuleViolation && jqXHR.responseText) {
+                    try {
+                        const parsed = JSON.parse(jqXHR.responseText);
+                        const rules = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.rules) ? parsed.rules : null);
+                        if (rules && rules.some(rule => rule && typeof rule.type === 'string' && rule.type.toLowerCase().includes('dataerror'))) {
+                            isDataRuleViolation = true;
+                        }
+                    } catch (parseError) {
+                        // Not JSON - fall through to the generic error path below
+                    }
+                }
+
+                if (isDataRuleViolation) {
                     console.log(`[QuickAddParticipants] ${displayName} is already a participant in this ${contextName}`);
 
                     // StarRez will show its own popup for data rule violations
@@ -3608,11 +3648,8 @@
                     }
                 }
             }).always(() => {
-                if (searchInput) {
-                    searchInput.disabled = false;
-                    searchInput.placeholder = screenInfo.type === 'program' ? 'Add attendee...' : 'Add participant...';
-                    searchInput.style.opacity = '1';
-                }
+                clearTimeout(stuckInputTimeout);
+                reEnableSearchInput();
             });
         }
 
@@ -3981,6 +4018,10 @@
             });
 
             resultsContainer.style.display = 'block';
+
+            // Default to the top result so Enter adds it immediately, matching
+            // the quick access/launcher search behavior.
+            setSelectedIndex(0);
         }
 
         // Close the results dropdown
@@ -4090,13 +4131,14 @@
                 // For programs, we need to insert after the record count
                 const header = targetSection.parentElement;
                 const buttonBar = header.querySelector('.button-bar');
-                const paginationContainer = buttonBar ? buttonBar.querySelector('.pagination-container') : null;
-
-                if (!paginationContainer) {
+                if (!buttonBar) {
                     return false;
                 }
+                // Newer Attendees headers (Habitat UI) don't have a pagination-container;
+                // fall back to the button-bar itself so the search box still gets inserted.
+                const paginationContainer = buttonBar.querySelector('.pagination-container');
 
-                targetContainer = paginationContainer;
+                targetContainer = paginationContainer || buttonBar;
                 className = 'starwrench-quick-attendees-search';
             } else {
                 return false;
