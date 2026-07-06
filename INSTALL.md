@@ -1,8 +1,6 @@
 # Installing StarWrench
 
-StarWrench is a userscript — a small program that runs in your browser and enhances the StarRez interface with quality-of-life features. To run it, you'll need a userscript manager extension. This guide walks you through the whole process in a few minutes.
-
----
+StarWrench is a userscript — a small program that runs in your browser and enhances the StarRez interface with quality-of-life features. To run it, you'll need a userscript manager extension.
 
 ## Step 1 — Install Tampermonkey
 
@@ -17,49 +15,46 @@ Tampermonkey is a userscript manager. It lets you load custom scripts like StarW
 
 Click **Add to [Browser]** and confirm when prompted.
 
-![Tampermonkey extension page showing the Add to Chrome button](_images/01-tampermonkey-store.png)
+## Step 2 — Copy the StarWrench script
 
-Note: Developer mode needs to be enabled and Tampermonkey needs to have Userscripts enabled in Edge and Chrome. These must be set before StarWrench will work.
+Open the [StarWrench.js source](https://raw.githubusercontent.com/nathanhollows/StarWrench/refs/heads/main/StarWrench.js) and copy the entire contents — you'll paste this into Tampermonkey in a later step.
 
----
+## Step 3 — Enable developer mode and allow user scripts
 
-## Step 3 — Install StarWrench
+> [!NOTE]
+> This step can't be skipped. Browsers disable these settings by default to neuter ad blockers, which also impacts other useful tools like Tampermonkey.
 
-Click the link below to open the StarWrench script. Tampermonkey will intercept it and show an installation page.
+Open your browser's extensions menu and find Tampermonkey.
 
-**[Click here to install StarWrench](https://raw.githubusercontent.com/nathanhollows/StarWrench/refs/heads/main/StarWrench.js)**
+![Browser extensions menu with Tampermonkey listed](img/1%20extensions%20menu.png)
 
-![Tampermonkey installation page showing the StarWrench script details](_images/03-install-page.png)
+Turn on **Developer mode**.
 
----
+![Developer mode toggle switched on](img/2%20developer%20mode.png)
 
-## Step 4 — Confirm the installation
+Open Tampermonkey's extension details page.
 
-On the Tampermonkey installation page you'll see the script name, version, and the websites it will run on. Click **Install** to confirm.
+![Tampermonkey extension details page](img/3%20extension%20details.png)
 
-> StarWrench only runs on `vuw.starrezhousing.com` — it has no access to any other sites.
+Turn on **Allow User Scripts**.
 
-![Tampermonkey confirmation screen with the Install button highlighted](_images/04-confirm-install.png)
+![Allow User Scripts toggle switched on](img/4%20enable%20user%20scripts.png)
 
----
+## Step 4 — Create the script in Tampermonkey
 
-## Step 5 — Open StarRez
+Click the Tampermonkey icon in your toolbar and choose **Create a new script...**.
 
-Navigate to StarRez as you normally would. StarWrench loads automatically in the background — no extra steps needed.
+![Tampermonkey menu with Create a new script option](img/5%20create%20a%20new%20script.png)
+
+Select all the placeholder code in the editor, paste in the StarWrench script you copied in Step 2, then save with **Ctrl+S**.
+
+![Tampermonkey editor with the StarWrench script pasted in](img/6%20paste%20script%20and%20save%20%28ctrl%20s%29.png)
+
+## Step 5 — Open or refresh StarRez
+
+Navigate to StarRez as you normally would, or refresh the page if you already had it open. StarWrench loads automatically in the background — no extra steps needed.
 
 You'll know it's working when you see the **StarWrench settings icon** appear in the top navigation bar.
-
-![StarRez interface with the StarWrench settings icon visible in the top bar](_images/05-starrez-loaded.png)
-
----
-
-## Step 6 — Configure your plugins
-
-Click the StarWrench icon to open the settings panel. From here you can toggle individual features on or off to suit your workflow. Your preferences are saved automatically and persist across sessions.
-
-![StarWrench settings panel showing toggleable plugin list](_images/06-settings-panel.png)
-
----
 
 ## You're all set
 
