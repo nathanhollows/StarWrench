@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.17.3
+// @version      1.17.4
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.17.3';
+    const SUITE_VERSION = '1.17.4';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1503,7 +1503,16 @@
             }
 
             if (modified && textNode.parentNode) {
-                textNode.parentNode.replaceChild(fragment, textNode);
+                // Wrap in a single inline span rather than splicing the fragment's
+                // children directly into the parent — some display containers (e.g.
+                // habitat-display's multiline clamp) use `-webkit-box` on the slot's
+                // parent, which lays out each *direct* child as its own vertical flex
+                // item. Swapping one text node for several siblings there makes each
+                // linkified segment jump to its own line; a single wrapper keeps the
+                // child count unchanged so text keeps flowing inline.
+                const wrapper = document.createElement('span');
+                wrapper.appendChild(fragment);
+                textNode.parentNode.replaceChild(wrapper, textNode);
             }
 
             return modified;
@@ -1578,7 +1587,12 @@
             }
 
             if (modified && textNode.parentNode) {
-                textNode.parentNode.replaceChild(fragment, textNode);
+                // See the matching comment in linkifyIncidentReferences: wrap in a
+                // single span so we don't add extra direct children to `-webkit-box`
+                // multiline containers.
+                const wrapper = document.createElement('span');
+                wrapper.appendChild(fragment);
+                textNode.parentNode.replaceChild(wrapper, textNode);
             }
 
             return modified;
