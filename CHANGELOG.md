@@ -4,6 +4,9 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Dashboard Tweaks: the "Records: N" footer on each dashboard panel now updates live to show the number of matching rows while searching, so you can quickly see how many results a search turned up. Reverts to the panel's original total once the search is cleared.
+
 ### Fixed
 - Quick Add Participants: Auto Link Participants (manual and duty-rounds silent auto-fire) no longer pulls in @-mentioned residents from *other* incidents/duty-rounds records that were viewed earlier in the session. StarRez keeps previously opened records loaded in the DOM as background tabs (only one visible at a time) and never removes the @-mention links autoLinker renders into them, so an unscoped page-wide search for mentions was picking up residents from unrelated records and silently adding them as participants to whatever record was currently open. The search is now scoped to the current record's own detail screen.
 

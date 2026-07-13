@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.18.1
+// @version      1.18.2
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.18.1';
+    const SUITE_VERSION = '1.18.2';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -858,6 +858,42 @@
             return 0;
         }
 
+        const FOOTER_ORIGINAL_ATTRIBUTE = 'data-sw-original-footer';
+
+        function updateFooterCount(dashboardItem, query, visible) {
+            const footer = dashboardItem.querySelector('.dashboard-footer');
+            if (!footer) return;
+
+            // Cache StarRez's own text (e.g. "Records: 275") the first time we
+            // see this footer, so we can restore it once the search clears.
+            // A freshly rendered footer (new dashboard, re-navigation) won't
+            // have this attribute yet, so it re-captures automatically.
+            if (!footer.hasAttribute(FOOTER_ORIGINAL_ATTRIBUTE)) {
+                footer.setAttribute(FOOTER_ORIGINAL_ATTRIBUTE, footer.textContent);
+            }
+
+            const desired = query ? `Records: ${visible}` : footer.getAttribute(FOOTER_ORIGINAL_ATTRIBUTE);
+
+            // Mutate the existing text node's data in place instead of
+            // reassigning textContent. textContent always removes and
+            // reinserts a Text node — a "childList" DOM mutation — which was
+            // waking every other plugin's document-wide MutationObserver on
+            // every keystroke, across every dashboard panel at once. That
+            // cascade of simultaneous whole-document rescans was enough to
+            // hang/crash the tab on dashboards with several panels open.
+            // Editing the node's .data in place is a "characterData" mutation
+            // that those observers don't listen for, and skipping same-value
+            // writes avoids firing even that.
+            const textNode = footer.firstChild;
+            if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+                if (textNode.data !== desired) {
+                    textNode.data = desired;
+                }
+            } else if (footer.textContent !== desired) {
+                footer.textContent = desired;
+            }
+        }
+
         function filterDashboardItem(dashboardItem, query) {
             const rows = dashboardItem.querySelectorAll('tbody tr[data-recordid]');
             let visible = 0;
@@ -874,6 +910,7 @@
             } else {
                 dashboardItem.classList.remove('sw-empty-dashboard');
             }
+            updateFooterCount(dashboardItem, query, visible);
             return { total: rows.length, visible: visible };
         }
 
