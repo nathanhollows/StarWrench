@@ -4,6 +4,15 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Quick Add Participants: Auto Link Participants (manual and duty-rounds silent auto-fire) no longer pulls in @-mentioned residents from *other* incidents/duty-rounds records that were viewed earlier in the session. StarRez keeps previously opened records loaded in the DOM as background tabs (only one visible at a time) and never removes the @-mention links autoLinker renders into them, so an unscoped page-wide search for mentions was picking up residents from unrelated records and silently adding them as participants to whatever record was currently open. The search is now scoped to the current record's own detail screen.
+
+### Added
+- Violation Checker: shows an alert on the Quick Information section of an incident when it has no Violations tab (i.e. no violation recorded), with a button that opens the Add Violation wizard directly. Disappears automatically once a violation is added.
+
+### Removed
+- Incident Templates plugin (Shift Report / Flat Meeting templates for incident report descriptions) — no longer needed now that reports are done via another tool.
+
 ### Added
 - Dashboard Tweaks: styled search bar in dashboard headers that filters rows across every panel. Includes a clear (×) button, Esc-to-clear, and auto-loads panels in parallel via the StarRez `ActiveTable.GetPage` endpoint (no scrolling required) when a search yields no matches but the panel has more records on the server. Falls back to scroll-driven loading if the endpoint is unavailable.
 - Dashboard search loading feedback: while panels are loading, the input placeholder cycles through status messages and a blue spinner replaces the × button. Esc cancels in-flight loads so the user can filter on whatever's already loaded.
