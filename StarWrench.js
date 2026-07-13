@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.17.4
+// @version      1.18.1
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.17.4';
+    const SUITE_VERSION = '1.18.1';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -65,10 +65,10 @@
                 name: '📂 SharePoint Links',
                 description: 'Add SharePoint directory links to room detail pages for configured halls'
             },
-            incidentTemplates: {
+            violationChecker: {
                 enabled: true,
-                name: '📝 Incident Templates',
-                description: 'Quick templates for incident reports (e.g., Shift Report template)'
+                name: '⚠️ Violation Checker',
+                description: 'Shows an alert on the Quick Information section of conduct incidents that are missing a Violation, with a button to add one'
             },
             layoutFixes: {
                 enabled: true,
@@ -3667,17 +3667,38 @@
             });
         }
 
-        // Collect all @-mentioned resident IDs from DOM and shadow roots
-        function collectAutoLinkIds() {
+        // StarRez keeps multiple incident/duty-round records open simultaneously
+        // as background record tabs (only one visible at a time) instead of
+        // destroying the previous one when you navigate to a new record — and
+        // the @-mention links autoLinker renders are never cleaned up. So an
+        // unscoped document-wide query here would pick up residents mentioned
+        // in OTHER open (but not currently visible) records. Scope to the
+        // current screen's own root element whenever we can determine it.
+        function getCurrentScreenRoot(screenInfo) {
+            if (!screenInfo) return null;
+            if (screenInfo.type === 'incident') {
+                return document.querySelector(`#incident${screenInfo.id}-detail-screen`);
+            }
+            if (screenInfo.type === 'dutyrounds') {
+                return document.querySelector(`#dutyrounds${screenInfo.id}-detail-screen`);
+            }
+            return null; // program/attendees is a full module page, not a stacked screen tab
+        }
+
+        // Collect all @-mentioned resident IDs from DOM and shadow roots,
+        // scoped to `root` (defaults to the whole document) to avoid picking
+        // up mentions from other open-but-inactive record tabs.
+        function collectAutoLinkIds(root) {
+            const searchRoot = root || document;
             const ids = new Set();
-            function collectFromRoot(root) {
-                root.querySelectorAll('[data-sw-autolink-id]').forEach(function(el) {
+            function collectFromRoot(r) {
+                r.querySelectorAll('[data-sw-autolink-id]').forEach(function(el) {
                     const id = el.getAttribute('data-sw-autolink-id');
                     if (id) ids.add(id);
                 });
             }
-            collectFromRoot(document);
-            document.querySelectorAll('habitat-display').forEach(function(el) {
+            collectFromRoot(searchRoot);
+            searchRoot.querySelectorAll('habitat-display').forEach(function(el) {
                 if (el.shadowRoot) collectFromRoot(el.shadowRoot);
             });
             return Array.from(ids);
@@ -3769,7 +3790,9 @@
 
         function insertAutoLinkButton() {
             if (document.querySelector('.starwrench-autolink-btn')) return true;
-            const editBtn = document.querySelector('habitat-fieldset > habitat-button[slot="button"]');
+            const screenInfo = getCurrentScreenInfo();
+            const root = getCurrentScreenRoot(screenInfo) || document;
+            const editBtn = root.querySelector('habitat-fieldset > habitat-button[slot="button"]');
             if (!editBtn) return false;
 
             const button = document.createElement('habitat-button');
@@ -3781,7 +3804,8 @@
 
             button.addEventListener('click', function(e) {
                 e.stopPropagation();
-                const ids = collectAutoLinkIds();
+                const clickRoot = getCurrentScreenRoot(getCurrentScreenInfo()) || document;
+                const ids = collectAutoLinkIds(clickRoot);
                 if (ids.length === 0) {
                     if (typeof toastr !== 'undefined') {
                         toastr.info('', 'No @-mentioned residents found on this page.');
@@ -3812,11 +3836,12 @@
                     const screenKey = screenInfo ? screenInfo.type + ':' + screenInfo.id : null;
                     if (!screenKey || autoLinkFiredForScreen === screenKey) return;
 
-                    const ids = collectAutoLinkIds();
+                    const root = getCurrentScreenRoot(screenInfo) || document;
+                    const ids = collectAutoLinkIds(root);
                     if (ids.length === 0) return;
 
-                    const editBtn = document.querySelector('habitat-fieldset > habitat-button[slot="button"]');
-                    const container = (editBtn && editBtn.closest('habitat-fieldset')) || document;
+                    const editBtn = root.querySelector('habitat-fieldset > habitat-button[slot="button"]');
+                    const container = (editBtn && editBtn.closest('habitat-fieldset')) || root;
                     const existing = getExistingParticipants(container);
                     const newIds = ids.filter(function(id) { return !isAlreadyParticipant(id, existing); });
                     if (newIds.length === 0) {
@@ -3889,7 +3914,8 @@
             `;
 
             button.addEventListener('click', function() {
-                const ids = collectAutoLinkIds();
+                const root = getCurrentScreenRoot(getCurrentScreenInfo()) || document;
+                const ids = collectAutoLinkIds(root);
                 if (ids.length === 0) {
                     if (typeof toastr !== 'undefined') toastr.info('', 'No @-mentioned residents found on this page.');
                     else alert('No @-mentioned residents found on this page.');
@@ -4676,270 +4702,185 @@
         setTimeout(tryInsertLinks, 500); // Try immediately on load
     }
 
-    // INCIDENT TEMPLATES PLUGIN
-    function initIncidentTemplatesPlugin() {
-        let processedModals = new Set();
+    // VIOLATION CHECKER PLUGIN
+    function initViolationCheckerPlugin() {
+        const ALERT_CLASS = 'starwrench-violation-alert';
 
         const styles = document.createElement('style');
         styles.textContent = `
-            .incident-template-link {
-                float: right;
-                font-size: 12px;
-                color: #666;
-                margin-left: 10px;
-                min-width: fit-content;
+            .${ALERT_CLASS} {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                margin-bottom: 2rem;
+                padding: 10px 14px;
+                background-color: #fff3cd;
+                border: 1px solid #ffe69c;
+                border-radius: 4px;
+                color: #664d03;
+                font-size: 13px;
             }
-            .incident-template-link a {
-                color: #0077cc !important;
-                text-decoration: underline !important;
-                cursor: pointer !important;
+            .${ALERT_CLASS} .starwrench-violation-alert-text {
+                flex: 1 1 auto;
             }
-            .incident-template-link a:hover {
-                color: #005fa3 !important;
+            .${ALERT_CLASS} button {
+                flex: 0 0 auto;
+                background-color: #f0ad4e;
+                color: #fff;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .${ALERT_CLASS} button:hover {
+                background-color: #ec971f;
+            }
+            .${ALERT_CLASS} button:disabled {
+                opacity: 0.6;
+                cursor: default;
             }
         `;
         document.head.appendChild(styles);
 
-        function isIncidentModalOpen() {
+        // Get current incident ID from URL
+        function getCurrentIncidentId() {
+            const hash = window.location.hash;
+            if (!hash || !hash.includes('incident:')) return null;
+            const match = hash.match(/incident:(\d+)/);
+            return match ? match[1] : null;
+        }
+
+        // Only show on the "Quick Information" section, per the incident URL
+        // (e.g. #!incident:150812:quick%20information). No section segment
+        // also means the default (Quick Information) section is displayed.
+        function isQuickInformationSection() {
+            const hash = window.location.hash;
+            const match = hash.match(/incident:\d+:([^:]+)/);
+            if (!match) return true;
+            return decodeURIComponent(match[1]).trim().toLowerCase() === 'quick information';
+        }
+
+        // Returns true/false, or null if the detail screen isn't ready yet.
+        // Unscoped, like QuickIncidentStatus's own selectors — only one
+        // incident detail screen is displayed at a time.
+        //
+        // The Violations nav link is always present in the DOM (like
+        // Correspondence, Notes, Actions, etc.) but StarRez toggles the
+        // "hidden" class off only once that section has at least one
+        // record, so presence alone isn't enough — check visibility too.
+        function hasViolationsTab() {
+            const $links = document.querySelectorAll('.ui-detail-menu-link');
+            if (!$links.length) return null;
+
+            for (let i = 0; i < $links.length; i++) {
+                const key = $links[i].getAttribute('data-section-url-key');
+                if (key && key.trim() === 'Violations') {
+                    return !$links[i].classList.contains('hidden');
+                }
+            }
+            return false;
+        }
+
+        // Find the node the alert should be inserted after: the .clear div
+        // that follows .workflowheader-container, falling back to the
+        // workflowheader-container itself.
+        function findAnchor() {
+            const $header = document.querySelector('.workflowheader-container');
+            if (!$header) return null;
+
+            let $sibling = $header.nextElementSibling;
+            if ($sibling && $sibling.classList.contains('clear')) {
+                return $sibling;
+            }
+            return $header;
+        }
+
+        function openAddViolationWizard(button) {
             try {
-                if (typeof starrez === 'undefined' || !starrez.popup) {
-                    return false;
+                const $link = document.querySelector('a[data-uit="Violation"][data-methodname="NewIncidentViolation"][data-sourcetable="Incident"]');
+                if (!$link) {
+                    console.error('[ViolationChecker] Could not find the Violation wizard link');
+                    if (typeof starrez !== 'undefined' && starrez.ui && starrez.ui.ShowAlertMessage) {
+                        starrez.ui.ShowAlertMessage('Could not find the "Add Violation" option. Please use the New menu instead.', 'Error');
+                    } else {
+                        alert('Could not find the "Add Violation" option. Please use the New menu instead.');
+                    }
+                    if (button) button.disabled = false;
+                    return;
                 }
-
-                var $visiblePopup = document.querySelector('.ui-popup-parent:not(.hide)');
-                if (!$visiblePopup) {
-                    return false;
-                }
-
-                var headerElement = $visiblePopup.querySelector('.ui-popup-header');
-                if (!headerElement) {
-                    return false;
-                }
-
-                var headerText = headerElement.textContent.trim();
-                return headerText === 'Incident';
-
+                $link.click();
             } catch (error) {
-                console.error('Error checking modal state:', error);
-                return false;
+                console.error('[ViolationChecker] Error opening violation wizard:', error);
+                if (button) button.disabled = false;
             }
         }
 
-        function getModalId($modal) {
-            var modalId = $modal.getAttribute('id');
-            if (!modalId) {
-                modalId = $modal.querySelector('.ui-popup-header');
-                if (modalId) {
-                    modalId = modalId.textContent.trim() + '-' + Date.now();
-                }
-            }
-            return modalId || 'unknown-' + Date.now();
+        function removeAlert() {
+            document.querySelectorAll(`.${ALERT_CLASS}`).forEach($el => $el.remove());
         }
 
-        function addTemplateButton() {
+        function ensureAlert(incidentId) {
+            const existingId = `starwrench-violation-alert-${incidentId}`;
+            if (document.getElementById(existingId)) return;
+
+            // Remove any stale alerts for other incidents/sections first
+            removeAlert();
+
+            const $anchor = findAnchor();
+            if (!$anchor || !$anchor.parentNode) return;
+
+            const $alert = document.createElement('div');
+            $alert.id = existingId;
+            $alert.className = ALERT_CLASS;
+
+            const $text = document.createElement('span');
+            $text.className = 'starwrench-violation-alert-text';
+            $text.textContent = 'This incident has no Violation recorded.';
+
+            const $button = document.createElement('button');
+            $button.type = 'button';
+            $button.textContent = 'Add Violation';
+            $button.addEventListener('click', () => {
+                $button.disabled = true;
+                openAddViolationWizard($button);
+            });
+
+            $alert.appendChild($text);
+            $alert.appendChild($button);
+
+            $anchor.parentNode.insertBefore($alert, $anchor.nextSibling);
+        }
+
+        function checkViolations() {
             try {
-                if (!isIncidentModalOpen()) {
+                const incidentId = getCurrentIncidentId();
+                if (!incidentId || !isQuickInformationSection()) {
+                    removeAlert();
                     return;
                 }
 
-                var $modal = document.querySelector('.ui-popup-parent:not(.hide)');
-                if (!$modal) {
+                const hasViolations = hasViolationsTab();
+                if (hasViolations === null) return; // screen not ready yet
+                if (hasViolations) {
+                    removeAlert();
                     return;
                 }
 
-                var modalId = getModalId($modal);
-                if (processedModals.has(modalId)) {
-                    return;
-                }
-
-                var $whatHappenedHeader = null;
-                var headers = $modal.querySelectorAll('.fieldset-block .header');
-
-                for (var i = 0; i < headers.length; i++) {
-                    var caption = headers[i].querySelector('.ui-fieldset-caption');
-                    if (caption && caption.textContent.trim() === 'What happened?') {
-                        $whatHappenedHeader = headers[i];
-                        break;
-                    }
-                }
-
-                if (!$whatHappenedHeader) {
-                    return;
-                }
-
-                if ($whatHappenedHeader.querySelector('.incident-template-link')) {
-                    processedModals.add(modalId);
-                    return;
-                }
-
-                var templateContainer = document.createElement('div');
-                templateContainer.className = 'incident-template-link';
-                templateContainer.innerHTML = 'Templates: <a href="#" id="shift-report-template-link">Shift Report</a> | <a href="#" id="flat-meeting-template-link">Flat Meeting</a>';
-
-                $whatHappenedHeader.appendChild(templateContainer);
-                processedModals.add(modalId);
-
-                var link = templateContainer.querySelector('#shift-report-template-link');
-                if (link) {
-                    link.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        applyShiftReportTemplate($modal);
-                    });
-                }
-
-                var flatMeetingLink = templateContainer.querySelector('#flat-meeting-template-link');
-                if (flatMeetingLink) {
-                    flatMeetingLink.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        applyFlatMeetingTemplate($modal);
-                    });
-                }
-
+                ensureAlert(incidentId);
             } catch (error) {
-                console.error('Error adding template button:', error);
+                console.error('[ViolationChecker] Error checking violations:', error);
             }
         }
 
-        function removeFlatMeetingNotes($modal) {
-            var existing = $modal.querySelector('#flat-meeting-notes-li');
-            if (existing) {
-                existing.parentNode.removeChild(existing);
-            }
-        }
+        setTimeout(checkViolations, 1000);
+        setInterval(checkViolations, 2000);
 
-        function applyShiftReportTemplate($modal) {
-            try {
-                var titleInput = $modal.querySelector('input[name="Title"]');
-                var descriptionTextarea = $modal.querySelector('textarea[name="Description"]');
-
-                if (!titleInput || !descriptionTextarea) {
-                    console.error('Could not find Title or Description fields');
-                    return;
-                }
-
-                removeFlatMeetingNotes($modal);
-
-                titleInput.value = 'Shift Report - HALL';
-                descriptionTextarea.value = '# Follow up required: Yes/No\n\n# Resident interactions\n\n- \n\n# Tasks\n\n- \n\n# Incidents (IDs or "none to note")\n\n- \n\n# Duty rounds\n\n- \n- \n- \n';
-
-                if (typeof starrez !== 'undefined' &&
-                    typeof starrez.library !== 'undefined' &&
-                    starrez.library.controls &&
-                    starrez.library.controls.FlagChanged) {
-
-                    var titleControl = titleInput.closest('.edit-control');
-                    var descControl = descriptionTextarea.closest('.edit-control');
-
-                    if (titleControl && titleControl.id) {
-                        var $titleControl = document.getElementById(titleControl.id);
-                        if ($titleControl && window.$ && window.$($titleControl)) {
-                            starrez.library.controls.FlagChanged(window.$($titleControl));
-                        }
-                    }
-
-                    if (descControl && descControl.id) {
-                        var $descControl = document.getElementById(descControl.id);
-                        if ($descControl && window.$ && window.$($descControl)) {
-                            starrez.library.controls.FlagChanged(window.$($descControl));
-                        }
-                    }
-                }
-
-                if (titleInput.dispatchEvent) {
-                    titleInput.dispatchEvent(new Event('change', { bubbles: true }));
-                    titleInput.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-                if (descriptionTextarea.dispatchEvent) {
-                    descriptionTextarea.dispatchEvent(new Event('change', { bubbles: true }));
-                    descriptionTextarea.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-
-                console.log('Shift Report template applied successfully');
-
-            } catch (error) {
-                console.error('Error applying shift report template:', error);
-            }
-        }
-
-        function applyFlatMeetingTemplate($modal) {
-            try {
-                var titleInput = $modal.querySelector('input[name="Title"]');
-                var descriptionTextarea = $modal.querySelector('textarea[name="Description"]');
-
-                if (!titleInput || !descriptionTextarea) {
-                    console.error('Could not find Title or Description fields');
-                    return;
-                }
-
-                removeFlatMeetingNotes($modal);
-
-                titleInput.value = 'Flat Meeting - FLAT';
-                descriptionTextarea.value = '# Meeting summary\n\n\n\n# Individual resident notes (concerns, engagement, things of note)\n\n';
-
-                var descLi = descriptionTextarea.closest('li');
-                if (descLi) {
-                    var notesLi = document.createElement('li');
-                    notesLi.id = 'flat-meeting-notes-li';
-                    notesLi.innerHTML = '<label for="474da9ec73d9400e9967e7c210bbb989_input" title="Description">Notes:</label><div style="display: inline-block; padding-top: 0.6em; max-width: 74ch;">Add something personal/observational for each resident.<br>Upload photos of the rules + roster.<br>Tag all participants. </div>';
-                    descLi.parentNode.insertBefore(notesLi, descLi.nextSibling);
-                }
-
-                if (typeof starrez !== 'undefined' &&
-                    typeof starrez.library !== 'undefined' &&
-                    starrez.library.controls &&
-                    starrez.library.controls.FlagChanged) {
-
-                    var titleControl = titleInput.closest('.edit-control');
-                    var descControl = descriptionTextarea.closest('.edit-control');
-
-                    if (titleControl && titleControl.id) {
-                        var $titleControl = document.getElementById(titleControl.id);
-                        if ($titleControl && window.$ && window.$($titleControl)) {
-                            starrez.library.controls.FlagChanged(window.$($titleControl));
-                        }
-                    }
-
-                    if (descControl && descControl.id) {
-                        var $descControl = document.getElementById(descControl.id);
-                        if ($descControl && window.$ && window.$($descControl)) {
-                            starrez.library.controls.FlagChanged(window.$($descControl));
-                        }
-                    }
-                }
-
-                if (titleInput.dispatchEvent) {
-                    titleInput.dispatchEvent(new Event('change', { bubbles: true }));
-                    titleInput.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-                if (descriptionTextarea.dispatchEvent) {
-                    descriptionTextarea.dispatchEvent(new Event('change', { bubbles: true }));
-                    descriptionTextarea.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-
-                console.log('Flat Meeting template applied successfully');
-
-            } catch (error) {
-                console.error('Error applying flat meeting template:', error);
-            }
-        }
-
-        function checkForIncidentModal() {
-            try {
-                if (isIncidentModalOpen()) {
-                    addTemplateButton();
-                }
-            } catch (error) {
-                console.error('Error in checkForIncidentModal:', error);
-            }
-        }
-
-        setTimeout(checkForIncidentModal, 1000);
-        setInterval(checkForIncidentModal, 2000);
-
-        var observer = new MutationObserver(function() {
-            setTimeout(checkForIncidentModal, 300);
+        const observer = new MutationObserver(function() {
+            setTimeout(checkViolations, 300);
         });
         observer.observe(document.body, { childList: true, subtree: true });
     }
@@ -5150,8 +5091,10 @@
             case 'sharepointLinks':
                 initSharePointLinksPlugin();
                 break;
-            case 'incidentTemplates':
-                initIncidentTemplatesPlugin();
+            case 'incidentTemplates': // removed — no-op for saved settings
+                break;
+            case 'violationChecker':
+                initViolationCheckerPlugin();
                 break;
             case 'layoutFixes':
                 initLayoutFixesPlugin();
