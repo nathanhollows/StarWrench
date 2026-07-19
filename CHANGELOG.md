@@ -4,7 +4,11 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Auto Linker: incident links are now orange (previously the same blue as @mentions) and @mentions of historic (no-longer-resident) residents are now grey, so it's easy to tell incidents, current residents, and historic residents apart at a glance.
+
 ### Added
+- Auto Linker: also links StarRez's own "IncidentID: 149793" field-label format (e.g. copy-pasted from a grid or export), not just "incident ######" and "#######".
 - Dashboard Tweaks: the "Records: N" footer on each dashboard panel now updates live to show the number of matching rows while searching, so you can quickly see how many results a search turned up. Reverts to the panel's original total once the search is cleared.
 
 ### Fixed
