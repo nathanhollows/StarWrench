@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.18.2
+// @version      1.18.4
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.18.2';
+    const SUITE_VERSION = '1.18.4';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1464,6 +1464,27 @@
             'border-radius: 3px',
         ].join('; ');
 
+        // Incidents get their own orangey colour so they're visually distinct
+        // from resident @mentions at a glance.
+        const INCIDENT_LINK_STYLE = [
+            'color: #cc6600',
+            'text-decoration: underline',
+            'cursor: pointer',
+            'background: rgba(204, 102, 0, 0.1)',
+            'padding: 1px 3px',
+            'border-radius: 3px',
+            'transition: background 0.2s ease',
+        ].join('; ');
+
+        const INCIDENT_LINK_STYLE_HOVER = [
+            'color: #cc6600',
+            'text-decoration: none',
+            'cursor: pointer',
+            'background: rgba(204, 102, 0, 0.2)',
+            'padding: 1px 3px',
+            'border-radius: 3px',
+        ].join('; ');
+
         // ── UTILITIES ─────────────────────────────────────────────────────────
         function isInInput(node) {
             let parent = node.parentNode;
@@ -1490,12 +1511,12 @@
         // ── INCIDENT LINKER ───────────────────────────────────────────────────
         function createIncidentLink(incidentNumber, displayText) {
             const link = document.createElement('span');
-            link.setAttribute('style', LINK_STYLE);
+            link.setAttribute('style', INCIDENT_LINK_STYLE);
             link.setAttribute('data-sw-inc-link', 'true');
             link.textContent = displayText;
             link.title = 'Open incident ' + incidentNumber;
-            link.addEventListener('mouseenter', function() { link.setAttribute('style', LINK_STYLE_HOVER); });
-            link.addEventListener('mouseleave', function() { link.setAttribute('style', LINK_STYLE); });
+            link.addEventListener('mouseenter', function() { link.setAttribute('style', INCIDENT_LINK_STYLE_HOVER); });
+            link.addEventListener('mouseleave', function() { link.setAttribute('style', INCIDENT_LINK_STYLE); });
             link.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -1510,8 +1531,10 @@
             if (isInInput(textNode) || alreadyLinked(textNode)) return false;
 
             const text = textNode.textContent;
-            // "incident/report ######" (6-7 digits) or standalone ###### (6-7 digits, not preceded by word char)
-            const regex = /\b(incident|report)\s+(\d{6,7})\b|(?<!\w)#(\d{6,7})\b/gi;
+            // "incident/report ######" (6-7 digits), standalone ###### (6-7
+            // digits, not preceded by word char), or "IncidentID: ######"
+            // (StarRez's own field-label format, e.g. copy-pasted from a grid)
+            const regex = /\b(incident|report)\s+(\d{6,7})\b|(?<!\w)#(\d{6,7})\b|\bincident\s*id\s*:?\s*(\d{6,7})\b/gi;
 
             if (!regex.test(text)) return false;
             regex.lastIndex = 0;
@@ -1524,7 +1547,7 @@
             while ((match = regex.exec(text)) !== null) {
                 const matchStart = match.index;
                 const matchEnd = matchStart + match[0].length;
-                const incidentNumber = match[2] || match[3];
+                const incidentNumber = match[2] || match[3] || match[4];
 
                 if (matchStart > lastIndex) {
                     fragment.appendChild(document.createTextNode(text.slice(lastIndex, matchStart)));
@@ -1563,25 +1586,57 @@
         const ENTRY_LINK_STYLE = LINK_STYLE + '; user-select: none; -webkit-user-select: none';
         const ENTRY_LINK_STYLE_HOVER = LINK_STYLE_HOVER + '; user-select: none; -webkit-user-select: none';
 
+        // Historic (no-longer-resident) @mentions are greyed out so it's easy
+        // to tell at a glance which mentioned residents are still around.
+        // Matches the current/historic split used by the resident database
+        // (see initResidentDatabasePlugin's CURRENT_STATUSES).
+        const CURRENT_RESIDENT_STATUSES = ['Reserved', 'Tentative', 'In Room'];
+        const HISTORIC_ENTRY_LINK_STYLE = [
+            'color: #666666',
+            'text-decoration: underline',
+            'cursor: pointer',
+            'background: rgba(102, 102, 102, 0.12)',
+            'padding: 1px 3px',
+            'border-radius: 3px',
+            'transition: background 0.2s ease',
+            'user-select: none',
+            '-webkit-user-select: none',
+        ].join('; ');
+        const HISTORIC_ENTRY_LINK_STYLE_HOVER = [
+            'color: #666666',
+            'text-decoration: none',
+            'cursor: pointer',
+            'background: rgba(102, 102, 102, 0.22)',
+            'padding: 1px 3px',
+            'border-radius: 3px',
+            'user-select: none',
+            '-webkit-user-select: none',
+        ].join('; ');
+
         function createEntryLink(entryId) {
             const link = document.createElement('span');
-            link.setAttribute('style', ENTRY_LINK_STYLE);
             link.setAttribute('data-sw-at-link', 'true');
             link.setAttribute('data-sw-autolink-id', entryId);
 
             let displayText = '@' + entryId;
+            let isHistoric = false;
             if (typeof window.starWrenchResidentDB !== 'undefined') {
                 const resident = window.starWrenchResidentDB.getById(entryId);
                 if (resident) {
                     const firstName = resident.namePreferred || resident.nameFirst || '';
                     displayText = (firstName + ' ' + (resident.nameLast || '')).trim();
+                    isHistoric = !CURRENT_RESIDENT_STATUSES.includes(resident.status);
                 }
             }
 
+            const baseStyle = isHistoric ? HISTORIC_ENTRY_LINK_STYLE : ENTRY_LINK_STYLE;
+            const hoverStyle = isHistoric ? HISTORIC_ENTRY_LINK_STYLE_HOVER : ENTRY_LINK_STYLE_HOVER;
+            link.setAttribute('style', baseStyle);
+
             link.textContent = displayText;
-            link.title = 'Open entry ' + entryId;
-            link.addEventListener('mouseenter', function() { link.setAttribute('style', ENTRY_LINK_STYLE_HOVER); });
-            link.addEventListener('mouseleave', function() { link.setAttribute('style', ENTRY_LINK_STYLE); });
+            link.title = 'Open entry ' + entryId + (isHistoric ? ' (historic resident)' : '');
+            link.addEventListener('mouseenter', function() { link.setAttribute('style', hoverStyle); });
+            link.addEventListener('mouseleave', function() { link.setAttribute('style', baseStyle); });
             link.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -1644,7 +1699,7 @@
             var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
                 acceptNode: function(node) {
                     if (!node.textContent.trim() || isInInput(node) || alreadyLinked(node)) return NodeFilter.FILTER_REJECT;
-                    if (/\b(incident|report)\s+\d+\b/i.test(node.textContent) || /(?<!\w)#\d{6,7}/.test(node.textContent)) return NodeFilter.FILTER_ACCEPT;
+                    if (/\b(incident|report)\s+\d+\b/i.test(node.textContent) || /(?<!\w)#\d{6,7}/.test(node.textContent) || /\bincident\s*id\s*:?\s*\d{6,7}\b/i.test(node.textContent)) return NodeFilter.FILTER_ACCEPT;
                     return NodeFilter.FILTER_REJECT;
                 }
             });
