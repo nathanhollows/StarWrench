@@ -4,6 +4,9 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Auto Linker: the "IncidentID: 150940" text in an incident's own detail-nav breadcrumb footer is now a click-to-copy chip with a copy icon and an instant CSS tooltip ("Click to copy", switching to "Copied!" for 1s) instead of a navigational link — clicking it copies the normalized "#150940" form to the clipboard. Navigating there would just reload the incident you're already on, and people were copying the raw label text verbatim into reports.
+
 ### Changed
 - Auto Linker: incident links are now orange (previously the same blue as @mentions) and @mentions of historic (no-longer-resident) residents are now grey, so it's easy to tell incidents, current residents, and historic residents apart at a glance.
 
