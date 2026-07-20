@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.18.4
+// @version      1.18.5
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.18.4';
+    const SUITE_VERSION = '1.18.5';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1690,6 +1690,135 @@
             return modified;
         }
 
+        // ── INCIDENT ID BREADCRUMB → COPY CHIP ────────────────────────────────
+        // The activity-info footer on an incident's own detail nav shows plain
+        // text like "IncidentID: 150940". Linking that to navigate would just
+        // send you to the incident you're already viewing, so instead of the
+        // usual navigational link this becomes a click-to-copy chip — copying
+        // the normalized "#150940" form (not the raw "IncidentID: 150940"
+        // text) so people stop pasting the verbose label into reports.
+        const BREADCRUMB_PROCESSED_ATTR = 'data-sw-incidentid-breadcrumb';
+        const COPY_CHIP_TOOLTIP_DEFAULT = 'Click to copy';
+        const COPY_CHIP_TOOLTIP_COPIED = 'Copied!';
+
+        const copyChipStyles = document.createElement('style');
+        copyChipStyles.textContent = `
+            .sw-copy-chip, .sw-copy-chip * {
+                cursor: pointer;
+            }
+            .sw-copy-chip {
+                position: relative;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.4em;
+                color: #444;
+                background: rgba(0, 0, 0, 0.06);
+                padding: 1px 6px;
+                border-radius: 3px;
+                transition: background 0.15s ease;
+            }
+            .sw-copy-chip:hover {
+                background: rgba(0, 0, 0, 0.12);
+            }
+            .sw-copy-chip .sw-copy-chip-icon {
+                font-size: 0.85em;
+                opacity: 0.65;
+            }
+            .sw-copy-chip .sw-copy-chip-tooltip {
+                position: absolute;
+                bottom: 100%;
+                left: 50%;
+                transform: translateX(-50%) translateY(-4px);
+                background: #222;
+                color: #fff;
+                font-size: 11px;
+                line-height: 1.4;
+                padding: 3px 7px;
+                border-radius: 4px;
+                white-space: nowrap;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.1s ease;
+                z-index: 10000;
+            }
+            .sw-copy-chip:hover .sw-copy-chip-tooltip {
+                opacity: 1;
+            }
+        `;
+        document.head.appendChild(copyChipStyles);
+
+        function copyTextToClipboard(text) {
+            if (navigator.clipboard && window.isSecureContext) {
+                return navigator.clipboard.writeText(text);
+            }
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.cssText = 'position: fixed; left: -999999px; top: -999999px;';
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+            } finally {
+                document.body.removeChild(textarea);
+            }
+            return Promise.resolve();
+        }
+
+        function linkifyIncidentIdBreadcrumbs() {
+            document.querySelectorAll('.ui-detail-activityinfo > li').forEach(function(li) {
+                if (li.hasAttribute(BREADCRUMB_PROCESSED_ATTR)) return;
+
+                const text = (li.textContent || '').trim();
+                const match = text.match(/^IncidentID:\s*(\d{6,7})$/i);
+                if (!match) return;
+
+                li.setAttribute(BREADCRUMB_PROCESSED_ATTR, 'true');
+                li.setAttribute('data-sw-inc-link', 'true'); // reuse alreadyLinked() so the general linker skips this text
+
+                // The <footer> this breadcrumb lives in otherwise clips its
+                // contents, cutting off the tooltip since it's positioned
+                // above the chip via absolute positioning.
+                const footer = li.closest('footer');
+                if (footer) footer.style.overflow = 'visible';
+
+                const incidentNumber = match[1];
+                let resetTimer = null;
+
+                const chip = document.createElement('span');
+                chip.className = 'sw-copy-chip';
+
+                const label = document.createElement('span');
+                label.textContent = text;
+
+                const icon = document.createElement('i');
+                icon.className = 'fa-regular fa-copy sw-copy-chip-icon';
+
+                const tooltip = document.createElement('span');
+                tooltip.className = 'sw-copy-chip-tooltip';
+                tooltip.textContent = COPY_CHIP_TOOLTIP_DEFAULT;
+
+                chip.appendChild(label);
+                chip.appendChild(icon);
+                chip.appendChild(tooltip);
+
+                chip.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    copyTextToClipboard('#' + incidentNumber).then(function() {
+                        tooltip.textContent = COPY_CHIP_TOOLTIP_COPIED;
+                        if (resetTimer) clearTimeout(resetTimer);
+                        resetTimer = setTimeout(function() {
+                            resetTimer = null;
+                            tooltip.textContent = COPY_CHIP_TOOLTIP_DEFAULT;
+                        }, 1000);
+                    });
+                });
+
+                li.textContent = '';
+                li.appendChild(chip);
+            });
+        }
+
         // ── COMBINED ROOT PROCESSOR ───────────────────────────────────────────
         // doMentions must only be true for known read-only display containers.
         // Never pass true for document.body — form textareas live there.
@@ -1727,6 +1856,7 @@
             if (linkingInProgress) return;
             linkingInProgress = true;
             try {
+                linkifyIncidentIdBreadcrumbs();
                 // habitat-display paragraphs are read-only — run both linkers
                 document.querySelectorAll('habitat-display[role="paragraph"]').forEach(function(el) {
                     if (el.shadowRoot) processRoot(el.shadowRoot, true);
