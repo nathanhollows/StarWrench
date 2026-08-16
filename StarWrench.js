@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.18.5
+// @version      1.19.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.18.5';
+    const SUITE_VERSION = '1.19.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -74,6 +74,11 @@
                 enabled: true,
                 name: '📐 Layout Fixes',
                 description: 'Fixes common layout issues: constrains read-more text areas and bulk-edit field widths'
+            },
+            changeLogBlame: {
+                enabled: true,
+                name: '📜 Field History',
+                description: 'Adds a clean, gridded breakdown row under every entry in any Log Activities table, with resolved lookup labels. Click a field name to see its full history in a focused popup, instead of opening StarRez\'s View modal one row at a time'
             }
         }
     };
@@ -5273,6 +5278,952 @@
         phoneObserver.observe(document.body, { childList: true, subtree: true });
     }
 
+    // CHANGE LOG BLAME PLUGIN
+    // The "Log Activities" table's Description column already contains the
+    // same Field|OldValue|NewValue data shown in StarRez's own "View" modal,
+    // just pipe-delimited across newlines instead of laid out in a table —
+    // so instead of opening that modal for every row, this plugin inserts an
+    // extra row directly under each log row with the same information laid
+    // out as a proper grid (still ordered by date, exactly as StarRez
+    // rendered it). The original row's own cells — including the Description
+    // cell's raw pipe-delimited text — are deliberately never touched: that
+    // raw text has to stay parseable, because every re-parse (including the
+    // one that runs each time the field-inspection modal opens) reads it
+    // again from scratch. Clicking a field name opens that modal, scoped to
+    // just the one field's full history — that's the only thing the modal is
+    // for now: per-field inspection, not the primary view.
+    function initChangeLogBlamePlugin() {
+        const STYLE_ID = 'sw-change-log-blame-styles';
+        if (!document.getElementById(STYLE_ID)) {
+            const styles = document.createElement('style');
+            styles.id = STYLE_ID;
+            styles.textContent = `
+                /* Grays out each StarRez log row itself (not the table's own
+                   column headers) so it reads as a summary/header for its own
+                   expansion row underneath. Background only — nothing else
+                   about the row's own styling changes. A darker shade when
+                   expanded mirrors the mockup's .log-row.expanded. */
+                .sw-blame-log-row,
+                .sw-blame-log-row > td {
+                    background-color: #eef0f2 !important;
+                }
+                .sw-blame-log-row.sw-blame-log-row-expanded,
+                .sw-blame-log-row.sw-blame-log-row-expanded > td {
+                    background-color: #e3e9ed !important;
+                }
+                /* The whole row toggles on click when it has content to show
+                   (guarded in JS against clicks on real links/buttons inside
+                   it, e.g. StarRez's own "View" link or "..." dropdown). */
+                .sw-blame-log-row.sw-blame-log-row-expandable {
+                    cursor: pointer;
+                }
+                .sw-blame-toggle-indicator {
+                    display: inline-block; margin-right: 4px; color: #1670ad;
+                    font-size: 13px; vertical-align: middle; transform: rotate(0deg);
+                }
+                .sw-blame-log-row.sw-blame-log-row-expanded .sw-blame-toggle-indicator {
+                    transform: rotate(90deg);
+                }
+                /* Collapsed by default — .sw-blame-expansion-row-visible is
+                   toggled on/off in JS from expandedRows state. */
+                .sw-blame-expansion-row { display: none; }
+                .sw-blame-expansion-row.sw-blame-expansion-row-visible { display: table-row; }
+                .sw-blame-expansion-row > td {
+                    background: #f9fafb; padding: 13px 20px 14px 2.5em !important;
+                    border-top: none; border-left: 1px solid #eee;
+                }
+                .sw-blame-audit-detail { max-width: 900px; }
+                .sw-blame-audit-header {
+                    display: flex; align-items: center; justify-content: space-between;
+                    margin-bottom: 8px; gap: 10px;
+                }
+                .sw-blame-audit-title {
+                    display: flex; align-items: center; gap: 9px; flex: 0 0 auto;
+                    color: #54758e; font-size: 11px; font-weight: 600;
+                    text-transform: uppercase; letter-spacing: .35px;
+                }
+                .sw-blame-audit-count { color: #8295a3; font-size: 11px; }
+                .sw-blame-audit-changes { border-top: 1px solid #e1e7eb; }
+                .sw-blame-audit-change {
+                    display: flex; align-items: center; min-height: 34px;
+                    border-bottom: 1px solid #e1e7eb; font-size: 12px; gap: 8px;
+                }
+                .sw-blame-audit-change-long { align-items: flex-start; padding: 8px 0; }
+                .sw-blame-audit-field {
+                    width: 200px; flex: 0 0 200px;
+                    color: var(--color-starrezbrandcolors-blue60, #056bb3);
+                    font-weight: 500; cursor: pointer;
+                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                }
+                .sw-blame-audit-field:hover { text-decoration: underline; }
+                .sw-blame-audit-old, .sw-blame-audit-new {
+                    display: inline-flex; align-items: center; min-height: 24px; padding: 3px 9px;
+                    border-radius: 3px; max-width: 320px;
+                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                }
+                .sw-blame-audit-old { color: #925757; background: #fff5f5; border: 1px solid #f2dfdf; }
+                .sw-blame-audit-new { color: #39734b; background: #f3faf5; border: 1px solid #dceee1; }
+                /* Compound selectors so this reliably overrides the old/new
+                   red/green colors above regardless of declaration order —
+                   both are single-class selectors, so specificity alone
+                   wouldn't decide the tie. */
+                .sw-blame-audit-old.sw-blame-audit-empty,
+                .sw-blame-audit-new.sw-blame-audit-empty {
+                    color: var(--color-grey-g60);
+                    background: var(--color-grey-g20);
+                    border: 1px solid var(--color-grey-g40);
+                }
+                .sw-blame-audit-arrow { flex: 0 0 24px; text-align: center; color: #94a4af; font-size: 14px; }
+                /* Long values (Description/Cause/free-text) stack full-width
+                   and wrap instead of trying to fit an inline pill. */
+                .sw-blame-audit-textwrap {
+                    flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+                }
+                .sw-blame-audit-block {
+                    display: block; max-width: none;
+                    white-space: normal; overflow-wrap: anywhere; word-break: break-word;
+                    line-height: 1.4; padding: 6px 9px;
+                }
+                .sw-blame-audit-notes { margin-top: 8px; color: #888; font-style: italic; font-size: 12px; }
+                .sw-blame-audit-meta { margin-top: 9px; color: #91a0aa; font-size: 11px; }
+                .sw-blame-expand-all-btn {
+                    margin-left: 10px; padding: 4px 10px; font-size: 12px;
+                    border: 1px solid #cfd6e0; border-radius: 4px;
+                    background: #f8f9fa; color: #333; cursor: pointer;
+                }
+                .sw-blame-expand-all-btn:hover { background: #eef1f5; }
+                .sw-blame-expand-all-btn:disabled { opacity: 0.5; cursor: default; }
+                .sw-blame-backdrop {
+                    position: fixed; inset: 0; z-index: 999999;
+                    background: rgba(0,0,0,0.5);
+                    display: flex; align-items: center; justify-content: center;
+                }
+                .sw-blame-panel {
+                    background: #fff; width: min(920px, 92vw); height: min(720px, 88vh);
+                    border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+                    display: flex; flex-direction: column; overflow: hidden;
+                    font-family: Arial, sans-serif;
+                }
+                .sw-blame-header {
+                    display: flex; align-items: center; justify-content: space-between;
+                    padding: 12px 16px; border-bottom: 1px solid #e9ecef; flex: 0 0 auto;
+                }
+                .sw-blame-header h2 { margin: 0; font-size: 16px; color: #333; }
+                .sw-blame-header .sw-blame-subtitle { font-size: 12px; color: #888; margin-top: 2px; }
+                .sw-blame-close-btn {
+                    border: none; background: transparent; font-size: 20px; line-height: 1;
+                    cursor: pointer; color: #666; padding: 4px 8px;
+                }
+                .sw-blame-close-btn:hover { color: #000; }
+                .sw-blame-toolbar {
+                    display: flex; align-items: center; gap: 10px;
+                    padding: 10px 16px; border-bottom: 1px solid #e9ecef; flex: 0 0 auto;
+                }
+                .sw-blame-toolbar input {
+                    flex: 1 1 auto; padding: 7px 10px; border: 1px solid #cfd6e0; border-radius: 4px;
+                    font-size: 13px; box-sizing: border-box;
+                }
+                .sw-blame-status { font-size: 11px; color: #888; padding: 6px 16px 0; flex: 0 0 auto; min-height: 14px; }
+                /* One flat grid for the whole scrollable body — every field's
+                   header/label/data cells are direct children of it, so they
+                   all share the same column tracks automatically. (An earlier
+                   version nested a grid-template-columns:subgrid box per
+                   field inside this grid; several engines botch intrinsic
+                   row-height for a subgridded-columns/auto-rows item nested
+                   this way and collapse it to a sliver, so that's avoided by
+                   not nesting a grid at all.) */
+                .sw-blame-body {
+                    flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 8px 1.5em 16px 16px;
+                    display: grid; grid-template-columns: 150px 130px 90px 1fr; column-gap: 12px;
+                    align-content: start;
+                }
+                .sw-blame-field-header {
+                    grid-column: 1 / -1;
+                    display: flex; align-items: center; justify-content: space-between;
+                    padding: 8px 12px; margin-top: 14px;
+                    background: #f8f9fa; cursor: pointer; user-select: none;
+                    font-size: 13px; font-weight: 600; color: #333; border-radius: 6px;
+                    min-width: 0;
+                }
+                .sw-blame-field-header:first-child { margin-top: 0; }
+                .sw-blame-field-header .sw-blame-count { font-weight: 400; color: #888; font-size: 12px; }
+                .sw-blame-col-label {
+                    padding: 6px 10px; border-bottom: 1px solid #e9ecef; color: #666;
+                    font-weight: 600; background: #fcfcfd; font-size: 11px;
+                    min-width: 0;
+                }
+                /* min-width:0 overrides the grid item default of min-width:auto
+                   (sized to content's min-content), which is what was forcing
+                   tracks to expand past 1fr for long unbroken values instead of
+                   wrapping. overflow-wrap/word-break cover values with no
+                   natural break points at all (long IDs, concatenated text). */
+                .sw-blame-cell {
+                    padding: 6px 10px; border-bottom: 1px solid #f2f3f5; font-size: 12.5px;
+                    min-width: 0; overflow-wrap: anywhere; word-break: break-word;
+                }
+                .sw-blame-empty { grid-column: 1 / -1; color: #888; font-size: 13px; padding: 20px; text-align: center; }
+            `;
+            document.head.appendChild(styles);
+        }
+
+        // Cache of resolved lookup labels, keyed by "field::rawId" -> display
+        // text (e.g. "RoomRateID::89" -> "89 (2026 Flexi term)"). Lives for the
+        // page session so the same ID is never fetched twice, even across
+        // separate "Resolve IDs" clicks or different change log panels.
+        const idLookupCache = new Map();
+        let resolveInProgress = false;
+        const RESOLVE_DELAY_MS = 200; // spacing between sequential fetches — never fire back-to-back
+
+        // Which rows are expanded, keyed by "controller::rowId" — module-level
+        // so it survives re-renders (ID resolution completing, lazy-loaded
+        // rows arriving). Empty by default: every row starts collapsed.
+        const expandedRows = new Set();
+
+        function rowKeyFor(evt) {
+            return `${evt.controller || ''}::${evt.rowId || ''}`;
+        }
+
+        // Above this length a value goes in its own full-width wrapped block
+        // instead of a compact inline pill — real change logs include fields
+        // like Description/Cause with multi-sentence text that would just get
+        // truncated to nothing useful at pill width.
+        const LONG_VALUE_THRESHOLD = 60;
+
+        function isIntegerId(value) {
+            return typeof value === 'string' && /^-?\d+$/.test(value.trim());
+        }
+
+        function lookupKey(field, value) {
+            return `${field}::${value}`;
+        }
+
+        const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+        function pad2(n) {
+            return String(n).padStart(2, '0');
+        }
+
+        // "02 Jul 2026 10:30 PM" (or "02 Jul 2026" when includeTime is false).
+        function formatDisplayDate(date, includeTime) {
+            if (!date) return '';
+            const day = pad2(date.getDate());
+            const month = MONTH_ABBR[date.getMonth()];
+            const year = date.getFullYear();
+            if (!includeTime) return `${day} ${month} ${year}`;
+            const hour = date.getHours();
+            const minute = pad2(date.getMinutes());
+            const ampm = hour >= 12 ? 'PM' : 'AM';
+            let hour12 = hour % 12;
+            if (hour12 === 0) hour12 = 12;
+            return `${day} ${month} ${year} ${hour12}:${minute} ${ampm}`;
+        }
+
+        // Formats raw ISO values pulled from the Description column: date-only
+        // fields (T00:00:00) drop the time entirely, datetime fields show it.
+        function formatFieldValue(value) {
+            if (typeof value !== 'string') return value;
+            const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/.exec(value.trim());
+            if (!m) return value;
+            const [, y, mo, d, hh, mm, ss] = m;
+            const date = new Date(parseInt(y, 10), parseInt(mo, 10) - 1, parseInt(d, 10), parseInt(hh, 10), parseInt(mm, 10), parseInt(ss, 10));
+            const isMidnight = hh === '00' && mm === '00' && ss === '00';
+            return formatDisplayDate(date, !isMidnight);
+        }
+
+        function parseLogDate(text) {
+            const m = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})\s*(am|pm)$/i.exec((text || '').trim());
+            if (!m) return null;
+            let hour = parseInt(m[4], 10);
+            const isPM = /pm/i.test(m[6]);
+            if (isPM && hour !== 12) hour += 12;
+            if (!isPM && hour === 12) hour = 0;
+            return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10), hour, parseInt(m[5], 10));
+        }
+
+        function parseChangeLogContainer(container) {
+            const table = container.querySelector('table.ui-detail-list-table');
+            if (!table) return null;
+
+            const headers = Array.from(table.querySelectorAll('thead th')).map(th => (th.textContent || '').trim());
+            // Exclude our own previously-inserted expansion rows — they have
+            // a <td> too, so without this a re-parse would try to read our
+            // *own* rendered output back as if it were a StarRez log row.
+            const rows = Array.from(table.querySelectorAll('tbody tr'))
+                .filter(tr => tr.querySelector('td') && !tr.classList.contains('sw-blame-expansion-row'));
+
+            const events = [];
+            rows.forEach(tr => {
+                const cells = Array.from(tr.children).filter(el => el.tagName === 'TD');
+                const rowData = {};
+                cells.forEach((td, i) => {
+                    rowData[headers[i] || `col${i}`] = td;
+                });
+
+                // The row's own View button carries the controller + record ID
+                // needed to re-fetch this event's resolved-label modal later.
+                const viewCell = tr.querySelector('td.view-cell[data-id]');
+                const rowId = viewCell ? viewCell.getAttribute('data-id') : null;
+                const controller = viewCell ? viewCell.getAttribute('data-controller') : null;
+
+                const rawDateText = rowData['Log Date'] ? rowData['Log Date'].textContent.trim() : '';
+                const parsedDate = parseLogDate(rawDateText);
+                const dateText = parsedDate ? formatDisplayDate(parsedDate, true) : rawDateText;
+                const userText = rowData['User Name'] ? rowData['User Name'].textContent.trim() : '';
+                const machineText = rowData['Machine'] ? rowData['Machine'].textContent.trim() : '';
+                const activityText = rowData['Log Activity'] ? rowData['Log Activity'].textContent.trim() : '';
+                // Read-only: the Description cell's raw pipe-delimited text is
+                // never modified, unlike the earlier design — it has to stay
+                // parseable on every re-parse (including the one that runs
+                // each time the inspection modal opens).
+                const descText = rowData['Description'] ? rowData['Description'].textContent : '';
+
+                const lines = descText.split('\n').map(l => l.trim()).filter(Boolean);
+                const fieldChanges = [];
+                const notes = [];
+                lines.forEach(line => {
+                    const parts = line.split('|');
+                    // Lines without exactly 3 parts aren't field changes (e.g. a
+                    // bare "Created" marker on an Insert row) — keep them as a
+                    // plain note so the row doesn't lose that information now
+                    // that we're replacing StarRez's own cell content.
+                    if (parts.length !== 3) {
+                        notes.push(line);
+                        return;
+                    }
+                    // SecurityUserID is an opaque internal ID with no useful
+                    // standalone history — the "User" column already shows
+                    // who made each change, so tracking it as its own field
+                    // just adds noise.
+                    if (parts[0] === 'SecurityUserID') return;
+                    // Each change object also carries the event's own
+                    // date/user/activity/rowId/controller and is shared by
+                    // reference between `events` and `fieldMap` below, so
+                    // resolving an ID (which mutates oldValue/newValue in
+                    // place) is visible from both the inline table row and
+                    // the per-field inspection modal without extra bookkeeping.
+                    fieldChanges.push({
+                        field: parts[0], oldValue: formatFieldValue(parts[1]), newValue: formatFieldValue(parts[2]),
+                        rowId, controller, dateText, user: userText, activity: activityText
+                    });
+                });
+
+                events.push({
+                    rowId, controller, rowEl: tr, colSpan: cells.length,
+                    date: parsedDate, dateText, user: userText, machine: machineText,
+                    activity: activityText, fieldChanges, notes
+                });
+            });
+
+            // Rows render newest-first; sort ascending so field timelines read chronologically.
+            events.sort((a, b) => (a.date ? a.date.getTime() : 0) - (b.date ? b.date.getTime() : 0));
+
+            const fieldMap = new Map();
+            events.forEach(evt => {
+                evt.fieldChanges.forEach(fc => {
+                    if (!fieldMap.has(fc.field)) fieldMap.set(fc.field, []);
+                    fieldMap.get(fc.field).push(fc);
+                });
+            });
+
+            const moduleOptions = container.querySelector('.sys-module-options');
+            const caption = container.querySelector('.caption.ui-fieldset-caption');
+
+            return {
+                title: caption ? caption.textContent.trim() : 'Log Activities',
+                dataObject: moduleOptions ? moduleOptions.getAttribute('data-dataobject') : '',
+                dataId: moduleOptions ? moduleOptions.getAttribute('data-dataid') : '',
+                eventCount: events.length,
+                events,
+                fieldMap
+            };
+        }
+
+        // Applies any previously-resolved lookup labels to freshly-parsed data
+        // immediately, before the first render — otherwise an ID resolved in an
+        // earlier pass would flash as a raw number again until resolveIds runs.
+        function applyKnownLookups(data) {
+            data.fieldMap.forEach((changes, field) => {
+                changes.forEach(c => {
+                    const oldKey = lookupKey(field, c.oldValue);
+                    if (idLookupCache.has(oldKey)) c.oldValue = idLookupCache.get(oldKey);
+                    const newKey = lookupKey(field, c.newValue);
+                    if (idLookupCache.has(newKey)) c.newValue = idLookupCache.get(newKey);
+                });
+            });
+        }
+
+        // Only integer values are ever lookup IDs in StarRez change logs — text
+        // and floats (e.g. "350.0000") are never expandable, so they're never
+        // considered here.
+        function eventNeedsResolution(event) {
+            return event.fieldChanges.some(fc =>
+                (isIntegerId(fc.oldValue) && !idLookupCache.has(lookupKey(fc.field, fc.oldValue))) ||
+                (isIntegerId(fc.newValue) && !idLookupCache.has(lookupKey(fc.field, fc.newValue)))
+            );
+        }
+
+        // Recomputed fresh each time (not memoized) because resolving one event
+        // via the shared idLookupCache can retroactively satisfy another event
+        // that references the same ID — that event should then be skipped
+        // rather than fetched a second time for no new information.
+        function collectEventsNeedingResolution(data) {
+            return data.events.filter(evt => evt.rowId && evt.controller && eventNeedsResolution(evt));
+        }
+
+        async function fetchChangeLogDetail(controller, id) {
+            const token = (typeof starrez !== 'undefined' && starrez.library && starrez.library.service &&
+                starrez.library.service.GetRequestVerificationToken)
+                ? starrez.library.service.GetRequestVerificationToken() : null;
+            const url = `${window.location.origin}/StarRezWeb/Main/${encodeURIComponent(controller)}/Show?id=${encodeURIComponent(id)}&_=${Date.now()}`;
+            const headers = { 'X-Requested-With': 'XMLHttpRequest' };
+            if (token) headers['__RequestVerificationToken'] = token;
+            const res = await fetch(url, { method: 'GET', credentials: 'same-origin', headers });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.text();
+        }
+
+        // Pairs the modal's resolved Field/Old Value/New Value rows back to
+        // this event's own raw fieldChanges (by field name) so we know exactly
+        // which raw integer each resolved label corresponds to.
+        function applyResolvedHtml(event, html) {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const rows = doc.querySelectorAll('table.general-table tbody tr');
+            rows.forEach(tr => {
+                const cells = tr.querySelectorAll('td');
+                if (cells.length < 3) return;
+                const fieldName = (cells[0].textContent || '').trim();
+                const oldText = (cells[1].textContent || '').trim();
+                const newText = (cells[2].textContent || '').trim();
+
+                const fc = event.fieldChanges.find(f => f.field === fieldName);
+                if (!fc) return;
+                if (isIntegerId(fc.oldValue)) idLookupCache.set(lookupKey(fieldName, fc.oldValue), oldText);
+                if (isIntegerId(fc.newValue)) idLookupCache.set(lookupKey(fieldName, fc.newValue), newText);
+            });
+        }
+
+        async function resolveIds(data, statusEl, onProgress) {
+            if (resolveInProgress) return;
+            resolveInProgress = true;
+            const failedKeys = new Set();
+            try {
+                const initialTotal = collectEventsNeedingResolution(data).length;
+                let resolvedCount = 0;
+                let index = 0;
+                while (true) {
+                    const remaining = collectEventsNeedingResolution(data)
+                        .filter(evt => !failedKeys.has(`${evt.controller}::${evt.rowId}`));
+                    if (remaining.length === 0) break;
+
+                    const evt = remaining[0];
+                    index++;
+                    if (statusEl) statusEl.textContent = `Resolving IDs… (${index} of ~${initialTotal})`;
+
+                    try {
+                        const html = await fetchChangeLogDetail(evt.controller, evt.rowId);
+                        applyResolvedHtml(evt, html);
+                        applyKnownLookups(data);
+                        resolvedCount++;
+                        if (onProgress) onProgress();
+                    } catch (error) {
+                        console.error('[ChangeLogBlame] Failed to resolve event', evt.controller, evt.rowId, error);
+                        failedKeys.add(`${evt.controller}::${evt.rowId}`);
+                    }
+
+                    // Rate-limit: always wait between requests, success or failure.
+                    await new Promise(r => setTimeout(r, RESOLVE_DELAY_MS));
+                }
+
+                if (statusEl) {
+                    statusEl.textContent = failedKeys.size > 0
+                        ? `Resolved ${resolvedCount} record${resolvedCount === 1 ? '' : 's'}; ${failedKeys.size} failed.`
+                        : `Resolved ${resolvedCount} record${resolvedCount === 1 ? '' : 's'} — IDs up to date.`;
+                }
+            } finally {
+                resolveInProgress = false;
+            }
+        }
+
+        function closeOverlay() {
+            const existing = document.querySelector('.sw-blame-backdrop');
+            if (existing) existing.remove();
+            document.removeEventListener('keydown', onEscape);
+        }
+
+        function onEscape(e) {
+            if (e.key === 'Escape') closeOverlay();
+        }
+
+        // Appends this field's header/label/data cells directly to `body`
+        // (the single flat grid) rather than into a wrapping element — see
+        // the comment on .sw-blame-body for why there's no nested grid here.
+        function renderFieldGroup(fieldName, changes, body) {
+            const header = document.createElement('div');
+            header.className = 'sw-blame-field-header';
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = fieldName;
+            const countSpan = document.createElement('span');
+            countSpan.className = 'sw-blame-count';
+            countSpan.textContent = `${changes.length} change${changes.length === 1 ? '' : 's'}`;
+            header.appendChild(nameSpan);
+            header.appendChild(countSpan);
+            body.appendChild(header);
+
+            const toggleCells = [];
+            ['Date', 'User', 'Activity', 'Old → New'].forEach(label => {
+                const cell = document.createElement('div');
+                cell.className = 'sw-blame-col-label';
+                cell.textContent = label;
+                body.appendChild(cell);
+                toggleCells.push(cell);
+            });
+
+            // Most recent change first within each field's own group.
+            changes.slice().reverse().forEach(c => {
+                const dateCell = document.createElement('div');
+                dateCell.className = 'sw-blame-cell';
+                dateCell.textContent = c.dateText;
+
+                const userCell = document.createElement('div');
+                userCell.className = 'sw-blame-cell';
+                userCell.textContent = c.user;
+
+                const activityCell = document.createElement('div');
+                activityCell.className = 'sw-blame-cell';
+                activityCell.textContent = c.activity;
+
+                const valueCell = document.createElement('div');
+                valueCell.className = 'sw-blame-cell';
+                valueCell.textContent = `${c.oldValue} → ${c.newValue}`;
+
+                [dateCell, userCell, activityCell, valueCell].forEach(cell => {
+                    body.appendChild(cell);
+                    toggleCells.push(cell);
+                });
+            });
+
+            let collapsed = false;
+            header.addEventListener('click', () => {
+                collapsed = !collapsed;
+                toggleCells.forEach(cell => { cell.style.display = collapsed ? 'none' : ''; });
+            });
+        }
+
+        function renderFieldsView(data, body, query) {
+            const sortedFields = Array.from(data.fieldMap.keys()).sort((a, b) => a.localeCompare(b));
+            if (sortedFields.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'sw-blame-empty';
+                empty.textContent = 'No field-level changes found in the currently loaded rows.';
+                body.appendChild(empty);
+                return;
+            }
+
+            const q = (query || '').trim().toLowerCase();
+            let shown = 0;
+            sortedFields.forEach(fieldName => {
+                if (q && !fieldName.toLowerCase().includes(q)) return;
+                renderFieldGroup(fieldName, data.fieldMap.get(fieldName), body);
+                shown++;
+            });
+
+            if (shown === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'sw-blame-empty';
+                empty.textContent = `No fields match "${query}".`;
+                body.appendChild(empty);
+            }
+        }
+
+        function isLongChange(fc) {
+            return fc.oldValue.length > LONG_VALUE_THRESHOLD || fc.newValue.length > LONG_VALUE_THRESHOLD;
+        }
+
+        function makeFieldLabel(fc, onFieldClick) {
+            const field = document.createElement('div');
+            field.className = 'sw-blame-audit-field';
+            field.textContent = fc.field;
+            field.title = `Show ${fc.field} over time`;
+            field.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onFieldClick(fc.field);
+            });
+            return field;
+        }
+
+        // Short values (IDs, dates, short strings) render as a compact
+        // field | old-pill → new-pill row, matching the mockup. Long values
+        // (Description/Cause/free-text fields, which real change logs are
+        // full of) get their own full-width wrapped block instead — a pill
+        // truncated to ~300px would just show the first few words.
+        function buildAuditChange(fc, onFieldClick) {
+            if (isLongChange(fc)) {
+                const row = document.createElement('div');
+                row.className = 'sw-blame-audit-change sw-blame-audit-change-long';
+                row.appendChild(makeFieldLabel(fc, onFieldClick));
+
+                const textWrap = document.createElement('div');
+                textWrap.className = 'sw-blame-audit-textwrap';
+                if (fc.oldValue) {
+                    const oldBlock = document.createElement('div');
+                    oldBlock.className = 'sw-blame-audit-old sw-blame-audit-block';
+                    oldBlock.textContent = fc.oldValue;
+                    textWrap.appendChild(oldBlock);
+                }
+                if (fc.newValue) {
+                    const newBlock = document.createElement('div');
+                    newBlock.className = 'sw-blame-audit-new sw-blame-audit-block';
+                    newBlock.textContent = fc.newValue;
+                    textWrap.appendChild(newBlock);
+                }
+                row.appendChild(textWrap);
+                return row;
+            }
+
+            const row = document.createElement('div');
+            row.className = 'sw-blame-audit-change';
+            row.appendChild(makeFieldLabel(fc, onFieldClick));
+
+            const oldEl = document.createElement('div');
+            oldEl.className = fc.oldValue ? 'sw-blame-audit-old' : 'sw-blame-audit-old sw-blame-audit-empty';
+            oldEl.textContent = fc.oldValue;
+            oldEl.title = fc.oldValue;
+
+            const arrow = document.createElement('div');
+            arrow.className = 'sw-blame-audit-arrow';
+            arrow.textContent = '→';
+
+            const newEl = document.createElement('div');
+            newEl.className = fc.newValue ? 'sw-blame-audit-new' : 'sw-blame-audit-new sw-blame-audit-empty';
+            newEl.textContent = fc.newValue;
+            newEl.title = fc.newValue;
+
+            row.appendChild(oldEl);
+            row.appendChild(arrow);
+            row.appendChild(newEl);
+            return row;
+        }
+
+        // Builds the content that goes inside an expansion row's single
+        // spanning <td> — a "Changes" header (dot + count), each change, and
+        // a closing "Update by USER · MACHINE" meta line, styled after the
+        // mockup's .audit-detail block.
+        function buildExpansionDetail(evt, onFieldClick) {
+            const wrap = document.createElement('div');
+            wrap.className = 'sw-blame-audit-detail';
+
+            const header = document.createElement('div');
+            header.className = 'sw-blame-audit-header';
+            const title = document.createElement('div');
+            title.className = 'sw-blame-audit-title';
+            title.textContent = 'Changes';
+            const count = document.createElement('div');
+            count.className = 'sw-blame-audit-count';
+            const n = evt.fieldChanges.length;
+            count.textContent = n > 0 ? `${n} change${n === 1 ? '' : 's'}` : (evt.notes[0] || '');
+            header.appendChild(title);
+            header.appendChild(count);
+            wrap.appendChild(header);
+
+            if (evt.fieldChanges.length > 0) {
+                const changes = document.createElement('div');
+                changes.className = 'sw-blame-audit-changes';
+                evt.fieldChanges.forEach(fc => {
+                    changes.appendChild(buildAuditChange(fc, onFieldClick));
+                });
+                wrap.appendChild(changes);
+            }
+
+            if (evt.notes.length > 0) {
+                const notesEl = document.createElement('div');
+                notesEl.className = 'sw-blame-audit-notes';
+                notesEl.textContent = evt.notes.join('  •  ');
+                wrap.appendChild(notesEl);
+            }
+
+            const meta = document.createElement('div');
+            meta.className = 'sw-blame-audit-meta';
+            meta.textContent = `${evt.activity} by ${evt.user} · ${evt.machine}`;
+            wrap.appendChild(meta);
+
+            return wrap;
+        }
+
+        // Syncs a row's expanded/collapsed DOM state (background, expansion
+        // row visibility) to whatever expandedRows currently says — called
+        // both from a click and after any re-render, so a background
+        // ID-resolution pass never resets what the user had open.
+        function updateRowExpansionUI(evt) {
+            if (!evt.rowEl) return;
+            const isExpanded = expandedRows.has(rowKeyFor(evt));
+            evt.rowEl.classList.toggle('sw-blame-log-row-expanded', isExpanded);
+            const next = evt.rowEl.nextElementSibling;
+            if (next && next.classList.contains('sw-blame-expansion-row')) {
+                next.classList.toggle('sw-blame-expansion-row-visible', isExpanded);
+            }
+        }
+
+        function toggleRowExpansion(evt) {
+            const key = rowKeyFor(evt);
+            if (expandedRows.has(key)) expandedRows.delete(key); else expandedRows.add(key);
+            updateRowExpansionUI(evt);
+        }
+
+        // Inserts (or replaces) a sibling <tr> directly under the event's own
+        // row, spanning every column, containing the formatted breakdown —
+        // collapsed by default. The original row and its cells — including
+        // the Description cell's raw text — are never touched (keeps them
+        // re-parseable). Clicking the row itself toggles it (guarded against
+        // clicks on any real link/button inside it, e.g. StarRez's own "View"
+        // link or "..." options dropdown, which must keep working normally).
+        function renderExpansionRow(evt, onFieldClick) {
+            if (!evt.rowEl || !evt.rowEl.parentNode) return;
+
+            evt.rowEl.classList.add('sw-blame-log-row');
+
+            const next = evt.rowEl.nextElementSibling;
+            if (next && next.classList.contains('sw-blame-expansion-row')) {
+                next.remove();
+            }
+
+            const hasContent = evt.fieldChanges.length > 0 || evt.notes.length > 0;
+
+            evt.rowEl.classList.toggle('sw-blame-log-row-expandable', hasContent);
+
+            const viewCell = evt.rowEl.querySelector('td.view-cell');
+
+            if (!hasContent) {
+                evt.rowEl.classList.remove('sw-blame-log-row-expanded');
+                const staleIndicator = viewCell ? viewCell.querySelector('.sw-blame-toggle-indicator') : null;
+                if (staleIndicator) staleIndicator.remove();
+                return;
+            }
+
+            // Purely visual — the row itself is what's clickable, this just
+            // shows state. A single glyph rotated via CSS transform (driven
+            // by the row's own .sw-blame-log-row-expanded class) rather than
+            // swapping between two different characters, which read as janky
+            // mid-transition.
+            if (viewCell && !viewCell.querySelector('.sw-blame-toggle-indicator')) {
+                const indicator = document.createElement('span');
+                indicator.className = 'sw-blame-toggle-indicator';
+                indicator.textContent = '›';
+                viewCell.insertBefore(indicator, viewCell.firstChild);
+            }
+
+            if (!evt.rowEl.hasAttribute('data-sw-blame-click-bound')) {
+                evt.rowEl.setAttribute('data-sw-blame-click-bound', 'true');
+                evt.rowEl.addEventListener('click', (e) => {
+                    if (e.target.closest('a, button, input, textarea, select')) return;
+                    toggleRowExpansion(evt);
+                });
+            }
+
+            const tr = document.createElement('tr');
+            tr.className = 'sw-blame-expansion-row';
+
+            const td = document.createElement('td');
+            td.colSpan = evt.colSpan;
+            td.appendChild(buildExpansionDetail(evt, onFieldClick));
+            tr.appendChild(td);
+
+            evt.rowEl.parentNode.insertBefore(tr, evt.rowEl.nextSibling);
+
+            updateRowExpansionUI(evt);
+        }
+
+        // Injected once into the real table's own header bar (idempotent).
+        // Recomputes its own label/state every call, since "are all rows
+        // currently expanded" can change from lazy-loaded rows arriving.
+        function ensureExpandAllButton(container, getData) {
+            const buttonBar = container.querySelector('.header .button-bar');
+            if (!buttonBar) return;
+
+            let btn = buttonBar.querySelector('.sw-blame-expand-all-btn');
+            if (!btn) {
+                btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'sw-blame-expand-all-btn';
+                buttonBar.appendChild(btn);
+            }
+
+            const data = getData();
+            const eligible = data.events.filter(evt => evt.fieldChanges.length > 0 || evt.notes.length > 0);
+            const allExpanded = eligible.length > 0 && eligible.every(evt => expandedRows.has(rowKeyFor(evt)));
+            btn.textContent = allExpanded ? 'Collapse All' : 'Expand All';
+            btn.disabled = eligible.length === 0;
+
+            btn.onclick = () => {
+                eligible.forEach(evt => {
+                    const key = rowKeyFor(evt);
+                    if (allExpanded) expandedRows.delete(key); else expandedRows.add(key);
+                });
+                eligible.forEach(evt => updateRowExpansionUI(evt));
+                ensureExpandAllButton(container, getData);
+            };
+        }
+
+        // Parses the container fresh, inserts/refreshes an expansion row under
+        // every event row, and kicks off background ID resolution — re-running
+        // this whole thing is what "keeps track of what's loaded" as the user
+        // scrolls in more rows: row count is checked by the caller, but the
+        // parse/render/resolve here is always a full, idempotent pass over
+        // whatever's currently in the table.
+        function enhanceChangeLogContainer(container) {
+            let data;
+            try {
+                data = parseChangeLogContainer(container);
+            } catch (error) {
+                console.error('[ChangeLogBlame] Error parsing change log table:', error);
+                return null;
+            }
+            if (!data) return null;
+
+            applyKnownLookups(data);
+
+            function renderAllRows() {
+                data.events.forEach(evt => {
+                    renderExpansionRow(evt, (fieldName) => {
+                        showBlameOverlay(container, fieldName);
+                    });
+                });
+                ensureExpandAllButton(container, () => data);
+            }
+
+            renderAllRows();
+
+            if (collectEventsNeedingResolution(data).length > 0) {
+                resolveIds(data, null, renderAllRows);
+            }
+
+            return data;
+        }
+
+        // The inspection modal — opened by clicking a field name in the
+        // table. Always scoped to one field at a time (with a search box to
+        // switch to another) rather than showing everything at once; the
+        // enhanced table itself is now the "see everything" view.
+        function showBlameOverlay(container, initialField) {
+            closeOverlay();
+
+            const data = parseChangeLogContainer(container);
+            if (!data) {
+                alert('StarWrench: could not parse this change log table.');
+                return;
+            }
+            applyKnownLookups(data);
+
+            const backdrop = document.createElement('div');
+            backdrop.className = 'sw-blame-backdrop';
+            backdrop.addEventListener('click', (e) => {
+                if (e.target === backdrop) closeOverlay();
+            });
+
+            const panel = document.createElement('div');
+            panel.className = 'sw-blame-panel';
+            panel.addEventListener('click', (e) => e.stopPropagation());
+
+            const header = document.createElement('div');
+            header.className = 'sw-blame-header';
+            const titleWrap = document.createElement('div');
+            const h2 = document.createElement('h2');
+            h2.textContent = initialField ? `${initialField} — ${data.title}` : `Field History — ${data.title}`;
+            const subtitle = document.createElement('div');
+            subtitle.className = 'sw-blame-subtitle';
+            const idLabel = data.dataObject ? `${data.dataObject}${data.dataId ? ' #' + data.dataId : ''} — ` : '';
+            subtitle.textContent = `${idLabel}${data.eventCount} log event${data.eventCount === 1 ? '' : 's'} on this page. Only what's currently loaded/paginated in the table is included.`;
+            titleWrap.appendChild(h2);
+            titleWrap.appendChild(subtitle);
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'sw-blame-close-btn';
+            closeBtn.innerHTML = '&times;';
+            closeBtn.title = 'Close';
+            closeBtn.addEventListener('click', closeOverlay);
+            header.appendChild(titleWrap);
+            header.appendChild(closeBtn);
+
+            const toolbar = document.createElement('div');
+            toolbar.className = 'sw-blame-toolbar';
+            const searchInput = document.createElement('input');
+            searchInput.type = 'text';
+            searchInput.placeholder = 'Filter by field name…';
+            toolbar.appendChild(searchInput);
+
+            const statusEl = document.createElement('div');
+            statusEl.className = 'sw-blame-status';
+
+            const body = document.createElement('div');
+            body.className = 'sw-blame-body';
+
+            function renderBody(query) {
+                body.innerHTML = '';
+                renderFieldsView(data, body, query);
+            }
+
+            searchInput.addEventListener('input', () => {
+                renderBody(searchInput.value);
+            });
+
+            searchInput.value = initialField || '';
+            renderBody(searchInput.value);
+
+            panel.appendChild(header);
+            panel.appendChild(toolbar);
+            panel.appendChild(statusEl);
+            panel.appendChild(body);
+            backdrop.appendChild(panel);
+            document.body.appendChild(backdrop);
+            document.addEventListener('keydown', onEscape);
+            setTimeout(() => { searchInput.focus(); searchInput.select(); }, 50);
+
+            // idLookupCache already applied above via applyKnownLookups; this
+            // only fires for whatever's still unresolved (e.g. the container's
+            // own background pass from enhanceChangeLogContainer hasn't
+            // reached this row yet).
+            if (collectEventsNeedingResolution(data).length > 0) {
+                resolveIds(data, statusEl, () => renderBody(searchInput.value));
+            }
+        }
+
+        // Re-enhances a container only when its row count has changed since
+        // the last pass (initial load, or the user scrolling in more rows via
+        // StarRez's own lazy-load) — cheap enough to just diff a count rather
+        // than track dirty state some other way, and it means an unchanged
+        // table costs nothing on the other ~499 out of 500 scan ticks.
+        function ensureEnhanced(container) {
+            const table = container.querySelector('table.ui-detail-list-table');
+            if (!table) return;
+            const tbody = table.querySelector('tbody');
+            if (!tbody) return;
+
+            // Only count StarRez's own rows — our expansion rows are also
+            // <tr> elements in this same tbody, and counting them would
+            // inflate every future comparison and mask genuine lazy-loaded
+            // rows (or worse, cause an endless re-enhance loop).
+            const currentRowCount = tbody.querySelectorAll('tr:not(.sw-blame-expansion-row)').length;
+            const lastRowCount = parseInt(container.getAttribute('data-sw-blame-row-count') || '-1', 10);
+            if (currentRowCount === lastRowCount) return;
+
+            container.setAttribute('data-sw-blame-row-count', String(currentRowCount));
+            enhanceChangeLogContainer(container);
+        }
+
+        function scanForChangeLogs() {
+            try {
+                document.querySelectorAll('[data-detail-list="LogActivity"]').forEach(ensureEnhanced);
+            } catch (error) {
+                console.error('[ChangeLogBlame] Error scanning for change logs:', error);
+            }
+        }
+
+        setTimeout(scanForChangeLogs, 1000);
+        setInterval(scanForChangeLogs, 2000);
+
+        const observer = new MutationObserver(() => scanForChangeLogs());
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
     // ================================
     // PLUGIN INITIALIZATION
     // ================================
@@ -5320,6 +6271,9 @@
                 break;
             case 'layoutFixes':
                 initLayoutFixesPlugin();
+                break;
+            case 'changeLogBlame':
+                initChangeLogBlamePlugin();
                 break;
         }
     }

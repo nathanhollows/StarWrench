@@ -4,6 +4,11 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-08-14
+
+### Added
+- Field History plugin: any "Log Activities" change log table (bookings, applications, incidents, etc.) gets a collapsed-by-default detail row inserted under each entry — click a row to expand a clean field-by-field breakdown (old → new as colored pills, long free-text fields like Description/Cause as wrapped blocks, empty values as neutral gray pills), with an "Expand All"/"Collapse All" button in the table header. Clicking a field name opens a small popup scoped to just that field's full history across the table. Lookup IDs (e.g. `RoomRateID` showing `89` instead of `89 (2026 Flexi term)`) resolve automatically in the background, rate-limited and cached so nothing is ever re-fetched. Dates are reformatted to a consistent human-readable style throughout. Only covers rows currently loaded on the page (no auto-pagination). The original table row and its data are never modified — everything is additive, so the row stays intact and re-readable no matter how many times the table re-renders.
+
 ## [1.18.5] - 2026-07-20
 
 ### Added
