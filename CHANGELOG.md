@@ -4,6 +4,11 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-09-17
+
+### Added
+- Auto Linker: hovering an @mention resident link or an incident link now shows StarRez's own summary rollover (the same quick-view popup you get when hovering a record link in a directory grid), including links inside report/description display fields.
+
 ## [1.19.0] - 2026-08-14
 
 ### Added
