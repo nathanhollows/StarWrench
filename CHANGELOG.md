@@ -4,6 +4,11 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-09-23
+
+### Added
+- Resident Search: hovering a resident in the instant-search results now shows StarRez's summary rollover, the same popup the auto-linker uses. Hover only — arrow-key navigation doesn't trigger it, so keyboard use stays request-free.
+
 ## [1.20.0] - 2026-09-17
 
 ### Added
