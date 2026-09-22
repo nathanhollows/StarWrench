@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.20.0
+// @version      1.21.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.20.0';
+    const SUITE_VERSION = '1.21.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -286,6 +286,77 @@
             }
         }, 1000);
     }
+
+    // ================================
+    // SHARED: STARREZ RECORD ROLLOVER
+    // ================================
+
+    // Mirrors StarRez's own hover rollover for `.ui-open-detailscreen` links
+    // — entries, incidents, anything with a detail screen
+    // (starrez.rollover.DisplayRolloverOnHover in starrez.min.js). We can't
+    // just add that class: StarRez binds it as a jQuery delegate on
+    // `document`, which never sees links inside habitat-display shadow
+    // roots, and it would also wire up StarRez's own detail-screen click
+    // handler. So we reuse the same pieces (<Controller>/SummaryView request,
+    // #srw_container, PositionMe) with per-link listeners instead.
+    const ROLLOVER_DELAY_MS = 200; // StarRez's StandardRollOverDelay
+    let rolloverTimer = null;
+    let rolloverHoverLink = null;
+    let $rolloverEl = null;
+
+    function canShowRecordRollover() {
+        return typeof window.MVC !== 'undefined' && window.MVC.Entry && window.MVC.Entry.SummaryView &&
+            typeof window.jQuery !== 'undefined' &&
+            typeof starrez !== 'undefined' && starrez.library && starrez.library.ui && starrez.library.ui.PositionMe;
+    }
+
+    function hideRecordRollover() {
+        clearTimeout(rolloverTimer);
+        rolloverTimer = null;
+        rolloverHoverLink = null;
+        if ($rolloverEl) {
+            $rolloverEl.remove();
+            $rolloverEl = null;
+        }
+    }
+
+    function loadRecordRollover(link, dbObjectName, recordId, zIndex) {
+        try {
+            const $ = window.jQuery;
+            const summary = new window.MVC.Entry.SummaryView(recordId);
+            summary.Area = window.MVC.GetControllerArea ? window.MVC.GetControllerArea(dbObjectName) : 'Main';
+            summary.Controller = dbObjectName;
+            summary.Request({ ShowLoading: false }).done(function(res) {
+                if (rolloverHoverLink !== link || !link.isConnected) return;
+                if ($rolloverEl) $rolloverEl.remove();
+                $rolloverEl = typeof $.toHTML === 'function' ? $.toHTML(res) : $(res);
+                $('#srw_container').append($rolloverEl);
+                starrez.library.ui.PositionMe($rolloverEl, { of: $(link), my: 'left top', at: 'left center+20' });
+                if (zIndex) $rolloverEl.css('z-index', zIndex);
+                $rolloverEl.addClass('shown');
+            });
+        } catch (e) {
+            console.error('[StarWrench] Rollover failed:', e);
+        }
+    }
+
+    // Same approach StarRez takes: Entry.SummaryView is just a generic
+    // SummaryView action whose Area/Controller get swapped per record type.
+    // zIndex: the instant-search modal sits above #srw_container, so callers
+    // rendering inside an overlay have to lift the popup to stay visible.
+    function attachRecordRollover(link, dbObjectName, recordId, zIndex) {
+        link.addEventListener('mouseenter', function() {
+            if (!canShowRecordRollover()) return;
+            hideRecordRollover();
+            rolloverHoverLink = link;
+            rolloverTimer = setTimeout(function() { loadRecordRollover(link, dbObjectName, recordId, zIndex); }, ROLLOVER_DELAY_MS);
+        });
+        link.addEventListener('mouseleave', hideRecordRollover);
+        link.addEventListener('click', hideRecordRollover);
+    }
+
+    document.addEventListener('keydown', hideRecordRollover, true);
+
 
     // ================================
     // PLUGIN IMPLEMENTATIONS
@@ -1512,69 +1583,6 @@
             }
             return false;
         }
-
-        // Mirrors StarRez's own hover rollover for `.ui-open-detailscreen` links
-        // — entries, incidents, anything with a detail screen
-        // (starrez.rollover.DisplayRolloverOnHover in starrez.min.js). We can't
-        // just add that class: StarRez binds it as a jQuery delegate on
-        // `document`, which never sees links inside habitat-display shadow
-        // roots, and it would also wire up StarRez's own detail-screen click
-        // handler. So we reuse the same pieces (<Controller>/SummaryView request,
-        // #srw_container, PositionMe) with per-link listeners instead.
-        const ROLLOVER_DELAY_MS = 200; // StarRez's StandardRollOverDelay
-        let rolloverTimer = null;
-        let rolloverHoverLink = null;
-        let $rolloverEl = null;
-
-        function canShowRecordRollover() {
-            return typeof window.MVC !== 'undefined' && window.MVC.Entry && window.MVC.Entry.SummaryView &&
-                typeof window.jQuery !== 'undefined' &&
-                typeof starrez !== 'undefined' && starrez.library && starrez.library.ui && starrez.library.ui.PositionMe;
-        }
-
-        function hideRecordRollover() {
-            clearTimeout(rolloverTimer);
-            rolloverTimer = null;
-            rolloverHoverLink = null;
-            if ($rolloverEl) {
-                $rolloverEl.remove();
-                $rolloverEl = null;
-            }
-        }
-
-        function loadRecordRollover(link, dbObjectName, recordId) {
-            try {
-                const $ = window.jQuery;
-                const summary = new window.MVC.Entry.SummaryView(recordId);
-                summary.Area = window.MVC.GetControllerArea ? window.MVC.GetControllerArea(dbObjectName) : 'Main';
-                summary.Controller = dbObjectName;
-                summary.Request({ ShowLoading: false }).done(function(res) {
-                    if (rolloverHoverLink !== link || !link.isConnected) return;
-                    if ($rolloverEl) $rolloverEl.remove();
-                    $rolloverEl = typeof $.toHTML === 'function' ? $.toHTML(res) : $(res);
-                    $('#srw_container').append($rolloverEl);
-                    starrez.library.ui.PositionMe($rolloverEl, { of: $(link), my: 'left top', at: 'left center+20' });
-                    $rolloverEl.addClass('shown');
-                });
-            } catch (e) {
-                console.error('[AutoLinker] Rollover failed:', e);
-            }
-        }
-
-        // Same approach StarRez takes: Entry.SummaryView is just a generic
-        // SummaryView action whose Area/Controller get swapped per record type.
-        function attachRecordRollover(link, dbObjectName, recordId) {
-            link.addEventListener('mouseenter', function() {
-                if (!canShowRecordRollover()) return;
-                hideRecordRollover();
-                rolloverHoverLink = link;
-                rolloverTimer = setTimeout(function() { loadRecordRollover(link, dbObjectName, recordId); }, ROLLOVER_DELAY_MS);
-            });
-            link.addEventListener('mouseleave', hideRecordRollover);
-            link.addEventListener('click', hideRecordRollover);
-        }
-
-        document.addEventListener('keydown', hideRecordRollover, true);
 
         // ── INCIDENT LINKER ───────────────────────────────────────────────────
         function createIncidentLink(incidentNumber, displayText) {
@@ -3219,6 +3227,12 @@
                     setSelectedIndex(index);
                 });
 
+                // Hover only — arrow-key navigation goes through setSelectedIndex
+                // directly, so keyboard users never trigger a summary request.
+                // The modal overlay is z-index 100000, and the rollover otherwise
+                // renders into #srw_container well below that, so lift it above.
+                attachRecordRollover(item, 'Entry', resident.entryId, 100001);
+
                 return item;
             }
 
@@ -3310,6 +3324,9 @@
                 const combined = [...bookmarkSlice, ...residentSlice];
 
                 currentResults = combined;
+                // Re-rendering removes the hovered item without firing mouseleave,
+                // which would otherwise strand its rollover on screen.
+                hideRecordRollover();
                 resultsContainer.innerHTML = '';
                 resultsContainer.classList.add('visible');
 
@@ -3436,6 +3453,7 @@
 
             // Close modal
             function closeModal() {
+                hideRecordRollover();
                 modal.style.display = 'none';
                 searchInput.value = '';
                 resultsContainer.innerHTML = '';
