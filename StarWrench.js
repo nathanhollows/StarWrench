@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.21.0
+// @version      1.22.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.21.0';
+    const SUITE_VERSION = '1.22.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -1771,14 +1771,17 @@
             return modified;
         }
 
-        // ── INCIDENT ID BREADCRUMB → COPY CHIP ────────────────────────────────
-        // The activity-info footer on an incident's own detail nav shows plain
-        // text like "IncidentID: 150940". Linking that to navigate would just
-        // send you to the incident you're already viewing, so instead of the
-        // usual navigational link this becomes a click-to-copy chip — copying
-        // the normalized "#150940" form (not the raw "IncidentID: 150940"
-        // text) so people stop pasting the verbose label into reports.
+        // ── INCIDENT/ENTRY ID BREADCRUMBS → COPY CHIPS ────────────────────────
+        // The activity-info footer on a detail nav shows plain text like
+        // "IncidentID: 150940" or "EntryID: 56909". Linking those to navigate
+        // would just send you to the record you're already viewing, so they
+        // become click-to-copy chips instead:
+        //   - Incidents: the whole breadcrumb renders and copies as
+        //     "IncidentID: #150940".
+        //   - Entries (#!entry:<id> screens only): just the number is a chip,
+        //     copying "56909".
         const BREADCRUMB_PROCESSED_ATTR = 'data-sw-incidentid-breadcrumb';
+        const ENTRY_BREADCRUMB_PROCESSED_ATTR = 'data-sw-entryid-breadcrumb';
         const COPY_CHIP_TOOLTIP_DEFAULT = 'Click to copy';
         const COPY_CHIP_TOOLTIP_COPIED = 'Copied!';
 
@@ -1845,58 +1848,83 @@
             return Promise.resolve();
         }
 
+        function createCopyChip(labelText, copyText) {
+            let resetTimer = null;
+
+            const chip = document.createElement('span');
+            chip.className = 'sw-copy-chip';
+
+            const label = document.createElement('span');
+            label.textContent = labelText;
+
+            const icon = document.createElement('i');
+            icon.className = 'fa-regular fa-copy sw-copy-chip-icon';
+
+            const tooltip = document.createElement('span');
+            tooltip.className = 'sw-copy-chip-tooltip';
+            tooltip.textContent = COPY_CHIP_TOOLTIP_DEFAULT;
+
+            chip.appendChild(label);
+            chip.appendChild(icon);
+            chip.appendChild(tooltip);
+
+            chip.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                copyTextToClipboard(copyText).then(function() {
+                    tooltip.textContent = COPY_CHIP_TOOLTIP_COPIED;
+                    if (resetTimer) clearTimeout(resetTimer);
+                    resetTimer = setTimeout(function() {
+                        resetTimer = null;
+                        tooltip.textContent = COPY_CHIP_TOOLTIP_DEFAULT;
+                    }, 1000);
+                });
+            });
+
+            return chip;
+        }
+
+        // The <footer> a breadcrumb lives in otherwise clips its contents,
+        // cutting off the tooltip since it's positioned above the chip via
+        // absolute positioning.
+        function unclipBreadcrumbFooter(li) {
+            const footer = li.closest('footer');
+            if (footer) footer.style.overflow = 'visible';
+        }
+
         function linkifyIncidentIdBreadcrumbs() {
+            // Entry chips only apply on entry screens, e.g.
+            // .../dutyroundsdirectory#!entry:56909:rez%20360
+            const entryHashMatch = (window.location.hash || '').match(/^#!entry:(\d+)/i);
+
             document.querySelectorAll('.ui-detail-activityinfo > li').forEach(function(li) {
-                if (li.hasAttribute(BREADCRUMB_PROCESSED_ATTR)) return;
+                if (li.hasAttribute(BREADCRUMB_PROCESSED_ATTR) || li.hasAttribute(ENTRY_BREADCRUMB_PROCESSED_ATTR)) return;
 
                 const text = (li.textContent || '').trim();
-                const match = text.match(/^IncidentID:\s*(\d{6,7})$/i);
-                if (!match) return;
 
-                li.setAttribute(BREADCRUMB_PROCESSED_ATTR, 'true');
-                li.setAttribute('data-sw-inc-link', 'true'); // reuse alreadyLinked() so the general linker skips this text
+                const incidentMatch = text.match(/^IncidentID:\s*(\d{6,7})$/i);
+                if (incidentMatch) {
+                    li.setAttribute(BREADCRUMB_PROCESSED_ATTR, 'true');
+                    li.setAttribute('data-sw-inc-link', 'true'); // reuse alreadyLinked() so the general linker skips this text
+                    unclipBreadcrumbFooter(li);
 
-                // The <footer> this breadcrumb lives in otherwise clips its
-                // contents, cutting off the tooltip since it's positioned
-                // above the chip via absolute positioning.
-                const footer = li.closest('footer');
-                if (footer) footer.style.overflow = 'visible';
+                    const incidentText = 'IncidentID: #' + incidentMatch[1];
+                    li.textContent = '';
+                    li.appendChild(createCopyChip(incidentText, incidentText));
+                    return;
+                }
 
-                const incidentNumber = match[1];
-                let resetTimer = null;
+                if (!entryHashMatch) return;
+                const entryMatch = text.match(/^EntryID:\s*(\d+)$/i);
+                if (!entryMatch) return;
 
-                const chip = document.createElement('span');
-                chip.className = 'sw-copy-chip';
+                li.setAttribute(ENTRY_BREADCRUMB_PROCESSED_ATTR, 'true');
+                li.setAttribute('data-sw-inc-link', 'true');
+                unclipBreadcrumbFooter(li);
 
-                const label = document.createElement('span');
-                label.textContent = text;
-
-                const icon = document.createElement('i');
-                icon.className = 'fa-regular fa-copy sw-copy-chip-icon';
-
-                const tooltip = document.createElement('span');
-                tooltip.className = 'sw-copy-chip-tooltip';
-                tooltip.textContent = COPY_CHIP_TOOLTIP_DEFAULT;
-
-                chip.appendChild(label);
-                chip.appendChild(icon);
-                chip.appendChild(tooltip);
-
-                chip.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    copyTextToClipboard('#' + incidentNumber).then(function() {
-                        tooltip.textContent = COPY_CHIP_TOOLTIP_COPIED;
-                        if (resetTimer) clearTimeout(resetTimer);
-                        resetTimer = setTimeout(function() {
-                            resetTimer = null;
-                            tooltip.textContent = COPY_CHIP_TOOLTIP_DEFAULT;
-                        }, 1000);
-                    });
-                });
-
-                li.textContent = '';
-                li.appendChild(chip);
+                const entryNumber = entryMatch[1];
+                li.textContent = 'EntryID: ';
+                li.appendChild(createCopyChip(entryNumber, entryNumber));
             });
         }
 

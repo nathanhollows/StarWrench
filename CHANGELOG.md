@@ -4,6 +4,14 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-09-24
+
+### Changed
+- Auto Linker: the "IncidentID" breadcrumb copy chip now displays and copies "IncidentID: #152263" (previously displayed the raw "IncidentID: 152263" and copied just "#152263").
+
+### Added
+- Auto Linker: on entry screens (`#!entry:<id>` URLs, from any directory), the "EntryID: 56909" breadcrumb in the detail-nav footer now has a click-to-copy chip on the number, copying just "56909".
+
 ## [1.21.0] - 2026-09-23
 
 ### Added
