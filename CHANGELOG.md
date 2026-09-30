@@ -4,6 +4,14 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-09-30
+
+### Added
+- Violation Checker (now "Incident Checker"): the Quick Information section of an incident now also shows an alert when the incident has no Participants, reading "This incident has no Participants recorded. Participants can't be added automatically to incidents", with an "Add Participants" button that opens StarRez's "Add Multiple Participants" wizard (the same one as New > Multiple Participants). Detection uses the same sidebar signal as violations: StarRez hides the Participants nav link until the incident has at least one participant.
+
+### Removed
+- Expand Initials plugin: initials in incident and shift report text are no longer expanded to "(Firstname Lastname)" from the participant list. The plugin and its setting have been removed entirely.
+
 ## [1.22.0] - 2026-09-24
 
 ### Changed
