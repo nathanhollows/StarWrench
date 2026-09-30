@@ -23,9 +23,6 @@ Copy record IDs from dashboard sections to clipboard for easy export and externa
 ### 🔍 Dropdown Search
 Add search functionality to the Dashboard dropdown menu for quick navigation.
 
-### 👤 Initials Expander
-Expands initials in shift and incident reports for easier reading and identification. Supports initials with optional dots between letters (e.g., J.D. or JD). Intelligently excludes common abbreviations like "CA [Name]" (Community Advisor), "ED House", and "EH/KF" combinations.
-
 ### 📱 Phone Formatter
 Automatically format phone numbers with proper spacing and grouping for improved readability.
 

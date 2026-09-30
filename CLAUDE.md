@@ -53,7 +53,6 @@ StarWrench uses a **monolithic plugin architecture** where all plugins are compi
 - **autoSelect** (initAutoSelectPlugin:434): Bulk select entries by pasting ID lists
 - **clipboard** (initClipboardPlugin:513): Copy record IDs from dashboard sections
 - **dropdown** (initDropdownPlugin:611): Search functionality for Dashboard dropdown menu
-- **initials** (initInitialsPlugin:674): Expands user initials in reports to full names
 - **phone** (initPhonePlugin:826): Formats phone numbers for readability
 - **wordHighlighter** (initWordHighlighterPlugin:1097): Color-codes color words
 - **autoLinker** (initAutoLinkerPlugin:933): Converts "incident ######" text to clickable links

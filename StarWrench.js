@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.22.0
+// @version      1.23.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.22.0';
+    const SUITE_VERSION = '1.23.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -34,11 +34,6 @@
                 enabled: true,
                 name: '📊 Dashboard Tweaks',
                 description: 'Adds search to dashboard headers (filters rows across all panels), search to the dashboard dropdown menu, and a button to copy Entry IDs to clipboard'
-            },
-            initials: {
-                enabled: true,
-                name: '👤 Expand Initials',
-                description: 'Expands initials in shift and incident reports for easy reading'
             },
             autoLinker: {
                 enabled: true,
@@ -67,8 +62,8 @@
             },
             violationChecker: {
                 enabled: true,
-                name: '⚠️ Violation Checker',
-                description: 'Shows an alert on the Quick Information section of conduct incidents that are missing a Violation, with a button to add one'
+                name: '⚠️ Incident Checker',
+                description: 'Shows alerts on the Quick Information section of incidents that are missing a Violation or Participants, with buttons to add them'
             },
             layoutFixes: {
                 enabled: true,
@@ -1302,220 +1297,6 @@
                 dashInput.select();
             }
         });
-    }
-
-    // INITIALS HIGHLIGHTER PLUGIN
-    function initInitialsPlugin() {
-        let processingInProgress = false;
-        let nameCache = {};
-        let currentIncidentId = null;
-
-        const styles = document.createElement('style');
-        styles.textContent = `
-            .initials-name {
-                color: #666; font-size: 0.9em; opacity: 0.7; font-style: italic;
-                margin-left: 2px; user-select: none;
-            }
-        `;
-        document.head.appendChild(styles);
-
-        function getCurrentIncidentId() {
-            // Extract incident ID from URL hash like #!incident:144073:quick%20information
-            const hash = window.location.hash;
-            if (!hash || !hash.includes('incident:')) return null;
-
-            const match = hash.match(/incident:(\d+)/);
-            return match ? match[1] : null;
-        }
-
-        function extractNamesFromParticipants() {
-            const names = {};
-            document.querySelectorAll('table.viewdefault').forEach(table => {
-                const fieldsetBlock = table.closest('.fieldset-block');
-                if (!fieldsetBlock) return;
-
-                const caption = fieldsetBlock.querySelector('.caption');
-                if (!caption || !caption.textContent.includes('Participants')) return;
-
-                table.querySelectorAll('tbody tr').forEach(row => {
-                    const nameCell = row.querySelector('.incidententryid span.field');
-                    if (!nameCell) return;
-
-                    const fullText = nameCell.textContent.trim();
-                    const match = fullText.match(/^[A-Z]+:\s*([^,]+),\s*([^(]+)(?:\(([^)]+)\))?/);
-
-                    if (match) {
-                        const lastName = match[1].trim();
-                        const firstNames = match[2].trim();
-                        const preferredName = match[3] ? match[3].trim() : '';
-                        const firstNameParts = firstNames.split(/\s+/);
-                        const primaryName = preferredName || firstNameParts[0];
-                        const lastInitial = lastName.charAt(0).toUpperCase();
-                        const firstInitial = primaryName.charAt(0).toUpperCase();
-
-                        names[firstInitial + lastInitial] = `${primaryName} ${lastName}`;
-
-                        if (firstNameParts.length > 1) {
-                            let fullInitials = '';
-                            firstNameParts.forEach(name => fullInitials += name.charAt(0).toUpperCase());
-                            fullInitials += lastInitial;
-                            names[fullInitials] = `${firstNames} ${lastName}`;
-                        }
-                    }
-                });
-            });
-            return names;
-        }
-
-        function shouldSkipNode(node) {
-            let parent = node.parentNode;
-            while (parent && parent.nodeType === Node.ELEMENT_NODE) {
-                const tagName = parent.tagName.toLowerCase();
-                if (tagName === 'input' || tagName === 'select' || tagName === 'textarea') return true;
-                if (parent.classList && parent.classList.contains('initials-highlight')) return true;
-                parent = parent.parentNode;
-            }
-            // Don't expand initials that immediately precede an auto-linked @mention —
-            // the link itself already shows the full name
-            const nextSib = node.nextSibling;
-            if (nextSib && nextSib.nodeType === Node.ELEMENT_NODE &&
-                nextSib.getAttribute && nextSib.getAttribute('data-sw-at-link') === 'true' &&
-                /\b[A-Z]{2,4}\.?\s*$/.test(node.textContent)) {
-                return true;
-            }
-            return false;
-        }
-
-        function processTextNode(textNode, nameMap) {
-            if (shouldSkipNode(textNode)) return false;
-
-            const text = textNode.textContent;
-            let modifiedText = text;
-            let modified = false;
-
-            const sortedInitials = Object.keys(nameMap).sort((a, b) => b.length - a.length);
-
-            for (const initials of sortedInitials) {
-                // Skip initials containing non-letter characters (e.g. "[preferred]" name parts)
-                // to avoid generating invalid regex patterns
-                if (!/^[A-Za-z]+$/.test(initials)) continue;
-
-                const fullName = nameMap[initials];
-
-                // Build regex pattern that allows optional dots between letters and trailing dot
-                // e.g., "JD" matches "JD", "J.D", "J.D."
-                const letters = initials.split('');
-                const pattern = letters.map(letter => `${letter}\\.?`).join('');
-
-                // Special cases to exclude from expansion
-                let regex;
-                if (initials === 'CA') {
-                    // Community Advisor: "CA" followed by space and capital letter (e.g., "CA Ido")
-                    regex = new RegExp(`\\b${pattern}(?!\\s+[A-Z])(?![a-zA-Z])`, 'g');
-                } else if (initials === 'ED') {
-                    // ED House: "ED" followed by space and "House"
-                    regex = new RegExp(`\\b${pattern}(?!\\s+House)(?![a-zA-Z])`, 'gi');
-                } else if (initials === 'EH' || initials === 'KF') {
-                    // EH/KF or EH KF: exclude when these appear in combination
-                    // Don't expand "EH" when followed by /KF or space+KF
-                    // Don't expand "KF" when preceded by EH/ or EH+space
-                    if (initials === 'EH') {
-                        regex = new RegExp(`\\b${pattern}(?!\\s*[/]?\\s*K\\.?F\\.?)(?![a-zA-Z])`, 'gi');
-                    } else { // KF
-                        regex = new RegExp(`(?<!E\\.?H\\.?\\s*[/]?\\s*)\\b${pattern}(?![a-zA-Z])`, 'gi');
-                    }
-                } else {
-                    // Normal case: match initials with optional dots, not followed by more letters
-                    regex = new RegExp(`\\b${pattern}(?![a-zA-Z])`, 'g');
-                }
-
-                if (regex.test(modifiedText)) {
-                    // Reset regex for replacement
-                    regex.lastIndex = 0;
-                    modifiedText = modifiedText.replace(regex, (match) => {
-                        // Preserve the matched text (with or without dots) in the highlight
-                        return `<span class="initials-highlight" title="${fullName}">${match}</span><span class="initials-name">(${fullName})</span>`;
-                    });
-                    modified = true;
-                }
-            }
-
-            if (modified) {
-                const tempDiv = document.createElement('div');
-                tempDiv.innerHTML = modifiedText;
-                const parent = textNode.parentNode;
-                const fragment = document.createDocumentFragment();
-                while (tempDiv.firstChild) {
-                    fragment.appendChild(tempDiv.firstChild);
-                }
-                parent.replaceChild(fragment, textNode);
-            }
-            return modified;
-        }
-
-        function processDescriptionFields() {
-            if (processingInProgress) return;
-            processingInProgress = true;
-
-            try {
-                // Check if we've navigated to a different incident
-                const incidentId = getCurrentIncidentId();
-                if (incidentId !== currentIncidentId) {
-                    // Clear the cache when switching incidents
-                    nameCache = {};
-                    currentIncidentId = incidentId;
-                    console.log(`[Initials] Cleared cache for new incident: ${incidentId}`);
-                }
-
-                const nameMap = extractNamesFromParticipants();
-                if (Object.keys(nameMap).length === 0) {
-                    processingInProgress = false;
-                    return;
-                }
-
-                // Replace the cache instead of merging
-                nameCache = nameMap;
-
-                document.querySelectorAll('span.field.view-control.textarea .textarea').forEach(field => {
-                    const walker = document.createTreeWalker(
-                        field,
-                        NodeFilter.SHOW_TEXT,
-                        {
-                            acceptNode: (node) => {
-                                if (!node.textContent.trim() || shouldSkipNode(node)) {
-                                    return NodeFilter.FILTER_REJECT;
-                                }
-                                return NodeFilter.FILTER_ACCEPT;
-                            }
-                        }
-                    );
-
-                    const textNodes = [];
-                    let node;
-                    while (node = walker.nextNode()) {
-                        textNodes.push(node);
-                    }
-
-                    textNodes.forEach(textNode => {
-                        if (textNode.parentNode) {
-                            processTextNode(textNode, nameCache);
-                        }
-                    });
-                });
-            } catch (error) {
-                console.error('Error in initials highlighter:', error);
-            }
-
-            processingInProgress = false;
-        }
-
-        setTimeout(processDescriptionFields, 2000);
-        setInterval(processDescriptionFields, 5000);
-
-        const observer = new MutationObserver(() => {
-            setTimeout(processDescriptionFields, 800);
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
     }
 
     // AUTO LINKER PLUGIN
@@ -5109,24 +4890,24 @@
         // Unscoped, like QuickIncidentStatus's own selectors — only one
         // incident detail screen is displayed at a time.
         //
-        // The Violations nav link is always present in the DOM (like
-        // Correspondence, Notes, Actions, etc.) but StarRez toggles the
-        // "hidden" class off only once that section has at least one
-        // record, so presence alone isn't enough — check visibility too.
-        function hasViolationsTab() {
+        // Section nav links (Violations, Participants, Correspondence, etc.)
+        // are always present in the DOM, but StarRez toggles the "hidden"
+        // class off only once that section has at least one record, so
+        // presence alone isn't enough — check visibility too.
+        function hasSectionRecords(sectionKey) {
             const $links = document.querySelectorAll('.ui-detail-menu-link');
             if (!$links.length) return null;
 
             for (let i = 0; i < $links.length; i++) {
                 const key = $links[i].getAttribute('data-section-url-key');
-                if (key && key.trim() === 'Violations') {
+                if (key && key.trim() === sectionKey) {
                     return !$links[i].classList.contains('hidden');
                 }
             }
             return false;
         }
 
-        // Find the node the alert should be inserted after: the .clear div
+        // Find the node the alerts should be inserted after: the .clear div
         // that follows .workflowheader-container, falling back to the
         // workflowheader-container itself.
         function findAnchor() {
@@ -5140,16 +4921,20 @@
             return $header;
         }
 
+        function showError(message) {
+            if (typeof starrez !== 'undefined' && starrez.ui && starrez.ui.ShowAlertMessage) {
+                starrez.ui.ShowAlertMessage(message, 'Error');
+            } else {
+                alert(message);
+            }
+        }
+
         function openAddViolationWizard(button) {
             try {
                 const $link = document.querySelector('a[data-uit="Violation"][data-methodname="NewIncidentViolation"][data-sourcetable="Incident"]');
                 if (!$link) {
                     console.error('[ViolationChecker] Could not find the Violation wizard link');
-                    if (typeof starrez !== 'undefined' && starrez.ui && starrez.ui.ShowAlertMessage) {
-                        starrez.ui.ShowAlertMessage('Could not find the "Add Violation" option. Please use the New menu instead.', 'Error');
-                    } else {
-                        alert('Could not find the "Add Violation" option. Please use the New menu instead.');
-                    }
+                    showError('Could not find the "Add Violation" option. Please use the New menu instead.');
                     if (button) button.disabled = false;
                     return;
                 }
@@ -5160,40 +4945,114 @@
             }
         }
 
-        function removeAlert() {
-            document.querySelectorAll(`.${ALERT_CLASS}`).forEach($el => $el.remove());
+        // Find StarRez's "Multiple Participants" menu row, which lives in
+        // the shadow DOM of the New menu's habitat components.
+        function findMultipleParticipantsRow(root) {
+            const $rows = root.querySelectorAll('.row[role="menuitem"]');
+            for (let i = 0; i < $rows.length; i++) {
+                const $span = $rows[i].querySelector(':scope > span');
+                if ($span && $span.textContent.trim() === 'Multiple Participants') {
+                    return $rows[i];
+                }
+            }
+            const $all = root.querySelectorAll('*');
+            for (let i = 0; i < $all.length; i++) {
+                if ($all[i].shadowRoot) {
+                    const $found = findMultipleParticipantsRow($all[i].shadowRoot);
+                    if ($found) return $found;
+                }
+            }
+            return null;
         }
 
-        function ensureAlert(incidentId) {
-            const existingId = `starwrench-violation-alert-${incidentId}`;
-            if (document.getElementById(existingId)) return;
+        // Open StarRez's "Add Multiple Participants" wizard — the same one
+        // behind New > Multiple Participants. Calls the wizard directly,
+        // falling back to clicking the shadow DOM menu row.
+        function openAddParticipantsWizard(button) {
+            try {
+                const incidentId = getCurrentIncidentId();
+                if (incidentId && typeof MVC !== 'undefined' && MVC.Wizards && MVC.Wizards.Incident &&
+                        MVC.Wizards.Incident.RunAddMultipleParticipants) {
+                    MVC.Wizards.Incident.RunAddMultipleParticipants([parseInt(incidentId, 10)], {
+                        CompleteFunction: function() {
+                            if (button) button.disabled = false;
+                        }
+                    });
+                    if (button) button.disabled = false;
+                    return;
+                }
 
-            // Remove any stale alerts for other incidents/sections first
-            removeAlert();
+                const $row = findMultipleParticipantsRow(document);
+                if (!$row) {
+                    console.error('[ViolationChecker] Could not find the Multiple Participants wizard');
+                    showError('Could not find the "Multiple Participants" option. Please use the New menu instead.');
+                    if (button) button.disabled = false;
+                    return;
+                }
+                $row.click();
+                if (button) button.disabled = false;
+            } catch (error) {
+                console.error('[ViolationChecker] Error opening participants wizard:', error);
+                if (button) button.disabled = false;
+            }
+        }
 
-            const $anchor = findAnchor();
-            if (!$anchor || !$anchor.parentNode) return;
+        // One alert per section that must have at least one record.
+        // Order here is the order the alerts are shown in.
+        const CHECKS = [
+            {
+                key: 'violations',
+                section: 'Violations',
+                text: 'This incident has no Violation recorded.',
+                buttonLabel: 'Add Violation',
+                onClick: openAddViolationWizard
+            },
+            {
+                key: 'participants',
+                section: 'Participants',
+                text: 'This incident has no Participants recorded. Participants can\'t be added automatically to incidents',
+                buttonLabel: 'Add Participants',
+                onClick: openAddParticipantsWizard
+            }
+        ];
+
+        function removeAlert(checkKey) {
+            const selector = checkKey ? `.${ALERT_CLASS}[data-check="${checkKey}"]` : `.${ALERT_CLASS}`;
+            document.querySelectorAll(selector).forEach($el => $el.remove());
+        }
+
+        function ensureAlert(incidentId, check, $after) {
+            const existingId = `starwrench-${check.key}-alert-${incidentId}`;
+            const $existing = document.getElementById(existingId);
+            if ($existing) return $existing;
+
+            // Remove any stale alerts of this kind for other incidents first
+            removeAlert(check.key);
+
+            if (!$after || !$after.parentNode) return null;
 
             const $alert = document.createElement('div');
             $alert.id = existingId;
             $alert.className = ALERT_CLASS;
+            $alert.setAttribute('data-check', check.key);
 
             const $text = document.createElement('span');
             $text.className = 'starwrench-violation-alert-text';
-            $text.textContent = 'This incident has no Violation recorded.';
+            $text.textContent = check.text;
 
             const $button = document.createElement('button');
             $button.type = 'button';
-            $button.textContent = 'Add Violation';
+            $button.textContent = check.buttonLabel;
             $button.addEventListener('click', () => {
                 $button.disabled = true;
-                openAddViolationWizard($button);
+                check.onClick($button);
             });
 
             $alert.appendChild($text);
             $alert.appendChild($button);
 
-            $anchor.parentNode.insertBefore($alert, $anchor.nextSibling);
+            $after.parentNode.insertBefore($alert, $after.nextSibling);
+            return $alert;
         }
 
         function checkViolations() {
@@ -5204,16 +5063,21 @@
                     return;
                 }
 
-                const hasViolations = hasViolationsTab();
-                if (hasViolations === null) return; // screen not ready yet
-                if (hasViolations) {
-                    removeAlert();
-                    return;
+                let $after = null;
+                for (let i = 0; i < CHECKS.length; i++) {
+                    const check = CHECKS[i];
+                    const hasRecords = hasSectionRecords(check.section);
+                    if (hasRecords === null) return; // screen not ready yet
+                    if (hasRecords) {
+                        removeAlert(check.key);
+                        continue;
+                    }
+                    if (!$after) $after = findAnchor();
+                    const $alert = ensureAlert(incidentId, check, $after);
+                    if ($alert) $after = $alert;
                 }
-
-                ensureAlert(incidentId);
             } catch (error) {
-                console.error('[ViolationChecker] Error checking violations:', error);
+                console.error('[ViolationChecker] Error checking incident records:', error);
             }
         }
 
@@ -6355,8 +6219,7 @@
             case 'dropdown':   // backwards compat
                 initDashboardTweaksPlugin();
                 break;
-            case 'initials':
-                initInitialsPlugin();
+            case 'initials': // removed — no-op for saved settings
                 break;
             case 'phone':      // backwards compat — merged into layoutFixes
             case 'wordHighlighter': // removed — no-op for saved settings
