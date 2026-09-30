@@ -4,10 +4,23 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-10-01
+
+### Changed
+- Auto Linker: picking a resident from the @ autocomplete now inserts their initials and room code (e.g. "JS EH-2-21U-B") instead of "JS @12345". Repeat mentions in the same field insert just the initials, unless another resident with the same initials has been mentioned in that field, after which every mention of either includes the room code.
+- Auto Linker: "initials + room code" mentions in reports link to the resident whose room and initials match, preferring In Room residents, then Reserved/Tentative, then historic (shown grey). The room code is replaced by the resident's name; mentions with no match (or a tie) are left as plain text. Legacy "@12345" mentions still link as before.
+- Auto Linker: the `starWrenchInjectInitials()` console helper now converts "@12345" / "JS @12345" mentions to the initials + room code format.
+- Quick Add Participants: Auto Add (the button, the incident "Auto Link Participants" button, and the silent duty-rounds auto-add) now only adds In Room residents, and only from the report's date until a week after it.
+
+## [1.23.1] - 2026-09-30
+
+### Changed
+- Incident Checker: the missing-participants alert now reads "This incident has no Participants recorded. Participants must be added manually".
+
 ## [1.23.0] - 2026-09-30
 
 ### Added
-- Violation Checker (now "Incident Checker"): the Quick Information section of an incident now also shows an alert when the incident has no Participants, reading "This incident has no Participants recorded. Participants can't be added automatically to incidents", with an "Add Participants" button that opens StarRez's "Add Multiple Participants" wizard (the same one as New > Multiple Participants). Detection uses the same sidebar signal as violations: StarRez hides the Participants nav link until the incident has at least one participant.
+- Violation Checker (now "Incident Checker"): the Quick Information section of an incident now also shows an alert when the incident has no Participants, with an "Add Participants" button that opens StarRez's "Add Multiple Participants" wizard (the same one as New > Multiple Participants). Detection uses the same sidebar signal as violations: StarRez hides the Participants nav link until the incident has at least one participant.
 
 ### Removed
 - Expand Initials plugin: initials in incident and shift report text are no longer expanded to "(Firstname Lastname)" from the participant list. The plugin and its setting have been removed entirely.

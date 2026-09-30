@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.23.0
+// @version      1.24.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.23.0';
+    const SUITE_VERSION = '1.24.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -38,7 +38,7 @@
             autoLinker: {
                 enabled: true,
                 name: '🔗 Auto Linker',
-                description: 'Converts "incident ######", "report ######", and ###### references into links, and @##### mentions into resident links with autocomplete'
+                description: 'Converts "incident ######", "report ######", and ###### references into links, and resident mentions (initials + room code, or legacy @#####) into resident links with autocomplete'
             },
             residentSearch: {
                 enabled: true,
@@ -1509,38 +1509,110 @@
             return link;
         }
 
+        // ── INITIALS + ROOM MENTIONS ──────────────────────────────────────────
+        // Residents are mentioned as "JS EH-21-U-B": their initials followed by
+        // their room code ([hall]-[floor/flat/building]-[room][-subroom], each
+        // segment variable-length alphanumeric). The resident is resolved by
+        // room + initials against the resident DB, preferring In Room, then
+        // Reserved/Tentative, then historic residents. An unmatched or tied
+        // mention is left as plain text. Legacy "@12345" mentions still link.
+        const ROOM_CODE_PATTERN = '[A-Za-z0-9]+-[A-Za-z0-9]+-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?';
+        const ROOM_MENTION_SOURCE = '(?<![\\p{L}\\p{N}])(\\p{Lu}{1,5})(\\s+)(' + ROOM_CODE_PATTERN + ')(?![\\p{L}\\p{N}-])';
+        // Groups: 1 legacy @id, 2 initials, 3 whitespace, 4 room code
+        const MENTION_REGEX_SOURCE = '@(\\d{4,5})\\b|' + ROOM_MENTION_SOURCE;
+
+        function newMentionRegex() {
+            return new RegExp(MENTION_REGEX_SOURCE, 'gu');
+        }
+
+        function normalizeRoom(room) {
+            return (room || '').trim().toUpperCase();
+        }
+
+        function residentTier(resident) {
+            if (resident.status === 'In Room') return 0;
+            if (CURRENT_RESIDENT_STATUSES.includes(resident.status)) return 1;
+            return 2;
+        }
+
+        // Residents grouped by normalized room code. Rebuilt when the DB's
+        // record count changes, and at most once a minute otherwise (a CSV
+        // re-import can change rooms without changing the count).
+        let roomIndex = null;
+        let roomIndexCount = -1;
+        let roomIndexBuiltAt = 0;
+        function getRoomIndex() {
+            if (typeof window.starWrenchResidentDB === 'undefined') return null;
+            const db = window.starWrenchResidentDB;
+            const count = db.getCount();
+            if (roomIndex && count === roomIndexCount && Date.now() - roomIndexBuiltAt < 60000) {
+                return roomIndex;
+            }
+            const index = Object.create(null);
+            db.getAll(false).forEach(function(resident) {
+                const room = normalizeRoom(resident.roomSpace);
+                if (!room) return;
+                (index[room] = index[room] || []).push(resident);
+            });
+            roomIndex = index;
+            roomIndexCount = count;
+            roomIndexBuiltAt = Date.now();
+            return roomIndex;
+        }
+
+        function resolveRoomMention(initials, roomCode) {
+            const index = getRoomIndex();
+            if (!index) return null;
+            const candidates = (index[normalizeRoom(roomCode)] || []).filter(function(resident) {
+                return residentInitials(resident) === initials;
+            });
+            if (candidates.length === 0) return null;
+            const bestTier = Math.min.apply(null, candidates.map(residentTier));
+            const best = candidates.filter(function(resident) { return residentTier(resident) === bestTier; });
+            return best.length === 1 ? best[0] : null;
+        }
+
         function linkifyAtMentions(textNode) {
             if (isInInput(textNode) || alreadyLinked(textNode)) return false;
 
             const text = textNode.textContent;
-            const atRegex = /@(\d{4,5})\b/g;
-
-            if (!atRegex.test(text)) return false;
-            atRegex.lastIndex = 0;
+            const regex = newMentionRegex();
 
             let lastIndex = 0;
             let modified = false;
             const fragment = document.createDocumentFragment();
             let match;
 
-            while ((match = atRegex.exec(text)) !== null) {
-                const matchStart = match.index;
-                const matchEnd = matchStart + match[0].length;
-
-                if (matchStart > lastIndex) {
-                    fragment.appendChild(document.createTextNode(text.slice(lastIndex, matchStart)));
+            while ((match = regex.exec(text)) !== null) {
+                let entryId;
+                let linkStart;
+                if (match[1]) {
+                    entryId = match[1];
+                    linkStart = match.index;
+                } else {
+                    const resident = resolveRoomMention(match[2], match[4]);
+                    if (!resident) continue;
+                    entryId = resident.entryId;
+                    // Initials stay as plain text; only the room code becomes the name link
+                    linkStart = match.index + match[2].length + match[3].length;
                 }
 
-                fragment.appendChild(createEntryLink(match[1]));
-                lastIndex = matchEnd;
+                if (linkStart > lastIndex) {
+                    fragment.appendChild(document.createTextNode(text.slice(lastIndex, linkStart)));
+                }
+
+                fragment.appendChild(createEntryLink(entryId));
+                lastIndex = match.index + match[0].length;
                 modified = true;
             }
+
+            if (!modified) return false;
 
             if (lastIndex < text.length) {
                 fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
             }
 
-            if (modified && textNode.parentNode) {
+            if (textNode.parentNode) {
                 // See the matching comment in linkifyIncidentReferences: wrap in a
                 // single span so we don't add extra direct children to `-webkit-box`
                 // multiline containers.
@@ -1549,7 +1621,7 @@
                 textNode.parentNode.replaceChild(wrapper, textNode);
             }
 
-            return modified;
+            return true;
         }
 
         // ── INCIDENT/ENTRY ID BREADCRUMBS → COPY CHIPS ────────────────────────
@@ -1733,7 +1805,7 @@
             walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
                 acceptNode: function(node) {
                     if (!node.textContent.trim() || isInInput(node) || alreadyLinked(node)) return NodeFilter.FILTER_REJECT;
-                    if (/@\d{4,5}\b/.test(node.textContent)) return NodeFilter.FILTER_ACCEPT;
+                    if (newMentionRegex().test(node.textContent)) return NodeFilter.FILTER_ACCEPT;
                     return NodeFilter.FILTER_REJECT;
                 }
             });
@@ -1936,15 +2008,10 @@
 
         // Initials of every space-separated name part of the displayed name
         // (preferred + last), uppercase. "Mary Jane Smith" → "MJS", mononyms
-        // collapse to a single letter. If the resident isn't in the local DB,
-        // we have no initials to derive — per spec, fall through to a plain
-        // @id insert so the picker still works in the degenerate case.
-        function getResidentInitials(entryId) {
-            if (typeof window.starWrenchResidentDB === 'undefined') return null;
-            var r = window.starWrenchResidentDB.getById(entryId);
-            if (!r) return null;
-            var firstName = (r.namePreferred || r.nameFirst || '').trim();
-            var lastName = (r.nameLast || '').trim();
+        // collapse to a single letter.
+        function residentInitials(resident) {
+            var firstName = (resident.namePreferred || resident.nameFirst || '').trim();
+            var lastName = (resident.nameLast || '').trim();
             var combined = (firstName + ' ' + lastName).trim();
             if (!combined) return null;
             return combined.split(/\s+/).map(function(part) {
@@ -1952,40 +2019,85 @@
             }).join('');
         }
 
-        // Console utility: rewrite raw @id mentions in a block of text to the
-        // picker's "INITIALS @id" + bare "INITIALS" repeat format. Lets users
-        // retrofit old records without a UI element.
+        function getResidentById(entryId) {
+            if (typeof window.starWrenchResidentDB === 'undefined') return null;
+            return window.starWrenchResidentDB.getById(entryId);
+        }
+
+        // Tracks which residents a block of text mentions, and under which
+        // initials, so repeat mentions and initials clashes can be detected.
+        function newMentionState() {
+            return { mentioned: Object.create(null), idsByInitials: Object.create(null) };
+        }
+
+        function noteMention(state, resident) {
+            state.mentioned[resident.entryId] = true;
+            var initials = residentInitials(resident);
+            if (!initials) return;
+            var ids = state.idsByInitials[initials] || (state.idsByInitials[initials] = []);
+            if (ids.indexOf(resident.entryId) === -1) ids.push(resident.entryId);
+        }
+
+        function scanMentions(text) {
+            var state = newMentionState();
+            var regex = newMentionRegex();
+            var match;
+            while ((match = regex.exec(text)) !== null) {
+                var resident = match[1] ? getResidentById(match[1]) : resolveRoomMention(match[2], match[4]);
+                if (resident) noteMention(state, resident);
+            }
+            return state;
+        }
+
+        // First mention → "JS EH-21-U-B", repeats → bare "JS". Once another
+        // resident with the same initials has been mentioned, every later
+        // mention of either carries the room code (earlier ones are left as
+        // they are). Residents without a room only ever get their initials.
+        function formatMention(resident, state) {
+            var initials = residentInitials(resident);
+            if (!initials) return null;
+            var room = (resident.roomSpace || '').trim();
+            var sameInitials = state.idsByInitials[initials] || [];
+            var clash = sameInitials.some(function(id) { return id !== resident.entryId; });
+            var repeat = !!state.mentioned[resident.entryId];
+            noteMention(state, resident);
+            if (!room || (repeat && !clash)) return initials;
+            return initials + ' ' + room;
+        }
+
+        // Console utility: rewrite legacy "@id" / "INITIALS @id" mentions in a
+        // block of text to the "INITIALS ROOM" format, following the same
+        // repeat/clash rules as the picker. Lets users retrofit old records
+        // without a UI element.
         //
         // Usage:
         //   await starWrenchInjectInitials()        // reads + writes clipboard
         //   starWrenchInjectInitials(`some text`)   // sync, returns transformed
         //
-        // Idempotent: re-running on already-prefixed text leaves it alone.
+        // Idempotent: text already in the new format is left alone.
         // Mentions whose IDs aren't in the resident DB are left untouched.
         function injectInitialsTransform(text) {
             if (typeof text !== 'string') return text;
-            var seen = Object.create(null);
+            var state = newMentionState();
+            // Groups: 1 prefix word, 2 whitespace, 3 @id, then 4-6 as ROOM_MENTION_SOURCE
+            var regex = new RegExp('(?:(?<![\\p{L}\\p{N}])(\\p{Lu}{1,5})(\\s+))?@(\\d{4,7})\\b|' + ROOM_MENTION_SOURCE, 'gu');
 
-            return text.replace(/@(\d{4,7})\b/g, function(match, id, offset, full) {
-                var initials = getResidentInitials(id);
-                if (!initials) return match;
-
-                // Treat as already-prefixed only if the *correct* initials for
-                // this resident sit directly before the @ — unrelated uppercase
-                // words ("FYI @123") are kept and the @id is still expanded.
-                var lookbackLen = initials.length + 2;
-                var preceding = full.substring(Math.max(0, offset - lookbackLen), offset);
-                var alreadyPrefixed = new RegExp('(?:^|\\W)' + initials + '\\s+$').test(preceding);
-
-                if (alreadyPrefixed) {
-                    seen[id] = true;
+            return text.replace(regex, function(match, prefix, prefixSpace, id, initials, space, room) {
+                if (!id) {
+                    var existing = resolveRoomMention(initials, room);
+                    if (existing) noteMention(state, existing);
                     return match;
                 }
-                if (seen[id]) {
-                    return initials;
+                var resident = getResidentById(id);
+                if (!resident) return match;
+                var formatted = formatMention(resident, state);
+                if (!formatted) return match;
+                // Keep an unrelated preceding word ("FYI @123"); the resident's
+                // own initials are replaced along with the @id.
+                if (prefix && prefix !== residentInitials(resident)) {
+                    return prefix + prefixSpace + formatted;
                 }
-                seen[id] = true;
-                return initials + ' @' + id;
+                return formatted;
             });
         }
 
@@ -2030,7 +2142,7 @@
             }
             var output = injectInitialsTransform(input);
             if (output === input) {
-                console.log('[StarWrench] No changes — clipboard already in initials format (or no @id mentions found).');
+                console.log('[StarWrench] No changes — no @id mentions found to convert.');
                 return output;
             }
             try {
@@ -2057,20 +2169,15 @@
             var before = field.value.substring(0, acAtPos);
             var after = field.value.substring(cursor);
 
-            var initials = getResidentInitials(entryId);
-            // Per-textarea anchor: if @id already lives anywhere in this field's
-            // current value, this is a repeat mention — drop the @id so OIA-
-            // stripped reports stay short and clean. The first occurrence keeps
-            // the @id so plugin users (and the linker) have something to bind to.
-            var alreadyAnchored = new RegExp('@' + entryId + '\\b').test(field.value);
-            var insertion;
-            if (initials && alreadyAnchored) {
-                insertion = initials + ' ';
-            } else if (initials) {
-                insertion = initials + ' @' + entryId + ' ';
-            } else {
-                insertion = '@' + entryId + ' ';
+            var resident = getResidentById(entryId);
+            // Repeat/clash detection runs over the field's text minus the
+            // in-progress "@query" being replaced.
+            var mention = resident ? formatMention(resident, scanMentions(before + '\n' + after)) : null;
+            if (!mention) {
+                acHide();
+                return;
             }
+            var insertion = mention + ' ';
 
             field.value = before + insertion + after;
             var newPos = before.length + insertion.length;
@@ -3826,7 +3933,58 @@
             return Array.from(ids);
         }
 
-        // Add all @-mentioned residents as participants in one request
+        // The report's date: the "Date" display field (shift reports), falling
+        // back to the date in the detail menu's breadcrumb (incidents, e.g.
+        // "Flat Meeting (EH-21U) , 2026-09-29 6:30 pm").
+        function getReportDate(root) {
+            const scope = root || document;
+            const candidates = [];
+            scope.querySelectorAll('habitat-display[caption="Date"]').forEach(function(el) {
+                candidates.push(el.textContent);
+            });
+            scope.querySelectorAll('.ui-detail-menu-link[data-crumb]').forEach(function(el) {
+                candidates.push(el.getAttribute('data-crumb'));
+            });
+            for (let i = 0; i < candidates.length; i++) {
+                const match = (candidates[i] || '').match(/(\d{4})-(\d{2})-(\d{2})/);
+                if (match) return new Date(parseInt(match[1], 10), parseInt(match[2], 10) - 1, parseInt(match[3], 10));
+            }
+            return null;
+        }
+
+        // Auto Add only runs from the report's date until a week after it,
+        // while room occupancy still matches the report.
+        function isInReportWeek(root) {
+            const reportDate = getReportDate(root);
+            if (!reportDate) {
+                console.warn('[QuickAddParticipants] Could not find the report date; skipping Auto Add');
+                return false;
+            }
+            const windowEnd = new Date(reportDate.getFullYear(), reportDate.getMonth(), reportDate.getDate() + 8);
+            const now = new Date();
+            return now >= reportDate && now < windowEnd;
+        }
+
+        // Mentioned residents eligible for Auto Add: In Room only, and only
+        // within the report's week.
+        function getAutoAddIds(root) {
+            if (!isInReportWeek(root)) return { ids: [], outsideWeek: true };
+            const ids = collectAutoLinkIds(root).filter(function(id) {
+                const resident = window.starWrenchResidentDB ? window.starWrenchResidentDB.getById(id) : null;
+                return !!resident && resident.status === 'In Room';
+            });
+            return { ids: ids, outsideWeek: false };
+        }
+
+        function notifyNoAutoAddIds(result) {
+            const message = result.outsideWeek
+                ? 'Auto Add only works within a week of the report date.'
+                : 'No in-room residents mentioned on this page.';
+            if (typeof toastr !== 'undefined') toastr.info('', message);
+            else alert(message);
+        }
+
+        // Add all mentioned residents as participants in one request
         function addLinkedParticipants(ids, button, opts) {
             const silent = !!(opts && opts.silent);
             const screenInfo = getCurrentScreenInfo();
@@ -3921,22 +4079,18 @@
             button.setAttribute('slot', 'button');
             button.setAttribute('compact', '');
             button.setAttribute('class', 'starwrench-autolink-btn');
-            button.setAttribute('title', 'Add all @-mentioned residents as participants');
+            button.setAttribute('title', 'Add all mentioned in-room residents as participants');
             button.textContent = 'Auto Link Participants';
 
             button.addEventListener('click', function(e) {
                 e.stopPropagation();
                 const clickRoot = getCurrentScreenRoot(getCurrentScreenInfo()) || document;
-                const ids = collectAutoLinkIds(clickRoot);
-                if (ids.length === 0) {
-                    if (typeof toastr !== 'undefined') {
-                        toastr.info('', 'No @-mentioned residents found on this page.');
-                    } else {
-                        alert('No @-mentioned residents found on this page.');
-                    }
+                const result = getAutoAddIds(clickRoot);
+                if (result.ids.length === 0) {
+                    notifyNoAutoAddIds(result);
                     return;
                 }
-                addLinkedParticipants(ids, button);
+                addLinkedParticipants(result.ids, button);
             });
 
             editBtn.parentElement.insertBefore(button, editBtn);
@@ -3959,7 +4113,7 @@
                     if (!screenKey || autoLinkFiredForScreen === screenKey) return;
 
                     const root = getCurrentScreenRoot(screenInfo) || document;
-                    const ids = collectAutoLinkIds(root);
+                    const ids = getAutoAddIds(root).ids;
                     if (ids.length === 0) return;
 
                     const editBtn = root.querySelector('habitat-fieldset > habitat-button[slot="button"]');
@@ -4021,7 +4175,7 @@
             button.type = 'button';
             button.className = 'starwrench-auto-add-btn';
             button.textContent = 'Auto Add';
-            button.title = 'Add all @-mentioned residents as participants, skipping existing ones';
+            button.title = 'Add all mentioned in-room residents as participants, skipping existing ones';
             button.style.cssText = `
                 margin-left: 6px;
                 height: 28px;
@@ -4037,20 +4191,20 @@
 
             button.addEventListener('click', function() {
                 const root = getCurrentScreenRoot(getCurrentScreenInfo()) || document;
-                const ids = collectAutoLinkIds(root);
-                if (ids.length === 0) {
-                    if (typeof toastr !== 'undefined') toastr.info('', 'No @-mentioned residents found on this page.');
-                    else alert('No @-mentioned residents found on this page.');
+                const result = getAutoAddIds(root);
+                if (result.ids.length === 0) {
+                    notifyNoAutoAddIds(result);
                     return;
                 }
+                const ids = result.ids;
 
                 const container = wrapper.closest('.fieldset-block.ui-fieldset-block');
                 const existing = container ? getExistingParticipants(container) : [];
                 const newIds = ids.filter(function(id) { return !isAlreadyParticipant(id, existing); });
 
                 if (newIds.length === 0) {
-                    if (typeof toastr !== 'undefined') toastr.info('', 'All @-mentioned residents are already participants.');
-                    else alert('All @-mentioned residents are already participants.');
+                    if (typeof toastr !== 'undefined') toastr.info('', 'All mentioned residents are already participants.');
+                    else alert('All mentioned residents are already participants.');
                     return;
                 }
 
@@ -5010,7 +5164,7 @@
             {
                 key: 'participants',
                 section: 'Participants',
-                text: 'This incident has no Participants recorded. Participants can\'t be added automatically to incidents',
+                text: 'This incident has no Participants recorded. Participants must be added manually',
                 buttonLabel: 'Add Participants',
                 onClick: openAddParticipantsWizard
             }
