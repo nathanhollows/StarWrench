@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.24.0
+// @version      1.26.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.24.0';
+    const SUITE_VERSION = '1.26.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2420,11 +2420,18 @@
             return result;
         }
 
-        // Import CSV data into database
+        // Import CSV data into database, replacing the existing list:
+        // residents missing from the CSV are removed.
         function importCSV(csvText) {
             try {
                 const records = parseCSV(csvText);
+                // An empty CSV would wipe the whole database — almost certainly
+                // the wrong file or a failed export, so refuse it.
+                if (records.length === 0) {
+                    throw new Error('CSV contains no residents; the existing database was left unchanged');
+                }
 
+                const newDB = {};
                 let addedCount = 0;
                 let updatedCount = 0;
 
@@ -2432,27 +2439,33 @@
                     const existing = residentDB[record.entryId];
 
                     if (!existing) {
-                        residentDB[record.entryId] = record;
+                        newDB[record.entryId] = record;
                         addedCount++;
-                    } else {
-                        // Check if anything changed
-                        const changed =
-                            existing.nameFirst !== record.nameFirst ||
-                            existing.namePreferred !== record.namePreferred ||
-                            existing.nameLast !== record.nameLast ||
-                            existing.roomSpace !== record.roomSpace ||
-                            existing.status !== record.status;
+                        return;
+                    }
 
-                        if (changed) {
-                            residentDB[record.entryId] = record;
-                            updatedCount++;
-                        }
+                    // Check if anything changed
+                    const changed =
+                        existing.nameFirst !== record.nameFirst ||
+                        existing.namePreferred !== record.namePreferred ||
+                        existing.nameLast !== record.nameLast ||
+                        existing.roomSpace !== record.roomSpace ||
+                        existing.status !== record.status;
+
+                    if (changed) {
+                        newDB[record.entryId] = record;
+                        updatedCount++;
+                    } else {
+                        newDB[record.entryId] = existing;
                     }
                 });
 
+                const removedCount = Object.keys(residentDB).filter(id => !newDB[id]).length;
+
+                residentDB = newDB;
                 saveDatabase();
 
-                return { addedCount, updatedCount, totalRecords: records.length };
+                return { addedCount, updatedCount, removedCount, totalRecords: Object.keys(newDB).length };
             } catch (error) {
                 console.error('[ResidentDB] Failed to import CSV:', error);
                 throw error;
@@ -2505,6 +2518,15 @@
             },
             getCount: function() {
                 return Object.keys(residentDB).length;
+            },
+            // Time of the last CSV import, or null if never imported
+            getLastUpdated: function() {
+                try {
+                    const meta = JSON.parse(localStorage.getItem(RESIDENT_DB_META_KEY) || 'null');
+                    return meta && meta.lastUpdated ? new Date(meta.lastUpdated) : null;
+                } catch (error) {
+                    return null;
+                }
             },
             importCSV: function(csvText) {
                 return importCSV(csvText);
@@ -2820,7 +2842,18 @@
 
             const footer = document.createElement('div');
             footer.id = 'starwrench-instant-search-footer';
-            footer.innerHTML = 'To update index: <strong>Main</strong> → Filter residents → <strong>Print view as report</strong> → <strong>CSV</strong> → Drag and drop here';
+            // Refreshed each time the modal opens
+            function updateFooter() {
+                const db = window.starWrenchResidentDB;
+                const lastUpdated = db && db.getCount() > 0 && db.getLastUpdated ? db.getLastUpdated() : null;
+                if (!lastUpdated || isNaN(lastUpdated.getTime())) {
+                    footer.textContent = 'Resident list not loaded';
+                    return;
+                }
+                const days = Math.floor((Date.now() - lastUpdated.getTime()) / 86400000);
+                footer.textContent = 'Last updated ' + (days <= 0 ? 'today' : days === 1 ? '1 day ago' : days + ' days ago');
+            }
+            updateFooter();
 
             container.appendChild(header);
             container.appendChild(resultsContainer);
@@ -3213,10 +3246,9 @@
                             <h3>No resident data available</h3>
                             <p>To populate the search index:</p>
                             <ol>
-                                <li>Navigate to <strong>Main → Entries</strong></li>
+                                <li>Go to the <a href="${DIRECTORY_URL}">Main → Entries directory</a></li>
                                 <li>Filter to the residents you want to index</li>
-                                <li>Click <strong>Print the view as report</strong></li>
-                                <li>Select <strong>CSV</strong> format</li>
+                                <li>Click <strong>Download CSV</strong> in the Lookup tooltip (or <strong>Print View as Report → CSV</strong>)</li>
                                 <li>Drag and drop the CSV file onto <strong>this search window</strong></li>
                             </ol>
                         </div>
@@ -3353,6 +3385,7 @@
 
             // Open modal
             function openModal() {
+                updateFooter();
                 modal.style.display = 'flex';
                 searchInput.value = '';
                 currentResults = [];
@@ -3405,7 +3438,7 @@
             // Setup drag-and-drop on modal container
             setupDragAndDropOnModal(container);
 
-            return { openModal, closeModal };
+            return { openModal, closeModal, updateFooter };
         }
 
         // Setup drag-and-drop on modal container
@@ -3455,14 +3488,15 @@
                         }
 
                         const result = window.starWrenchResidentDB.importCSV(csvText);
+                        onResidentListImported();
 
                         if (typeof starrez !== 'undefined' && starrez.ui && starrez.ui.ShowAlertMessage) {
                             starrez.ui.ShowAlertMessage(
-                                `CSV imported successfully!\n\nAdded: ${result.addedCount}\nUpdated: ${result.updatedCount}\nTotal: ${result.totalRecords}`,
+                                `CSV imported successfully!\n\nAdded: ${result.addedCount}\nUpdated: ${result.updatedCount}\nRemoved: ${result.removedCount}\nTotal: ${result.totalRecords}`,
                                 'success'
                             );
                         } else {
-                            alert(`CSV imported successfully!\n\nAdded: ${result.addedCount}\nUpdated: ${result.updatedCount}\nTotal: ${result.totalRecords}`);
+                            alert(`CSV imported successfully!\n\nAdded: ${result.addedCount}\nUpdated: ${result.updatedCount}\nRemoved: ${result.removedCount}\nTotal: ${result.totalRecords}`);
                         }
                     } catch (error) {
                         if (typeof starrez !== 'undefined' && starrez.ui && starrez.ui.ShowAlertMessage) {
@@ -3601,6 +3635,304 @@
             return true;
         }
 
+        // ── RESIDENT LIST FRESHNESS ───────────────────────────────────────────
+        // When the resident list hasn't been set up, or is more than a month
+        // old, a tooltip hangs below the Lookup button. Clicking it goes to the
+        // entries directory, where it shows expanded with short instructions
+        // and a Download CSV button; after downloading, Lookup opens ready for
+        // the CSV to be dropped onto it.
+        const DIRECTORY_URL = '/StarRezWeb/main/directory#';
+        const STALE_TOOLTIP_DISMISSED_KEY = 'starWrenchStaleTooltipDismissed';
+
+        let lookupSearch = null; // set by initResidentListNotices
+
+        function sessionGet(key) {
+            try { return sessionStorage.getItem(key); } catch (error) { return null; }
+        }
+        function sessionSet(key, value) {
+            try { sessionStorage.setItem(key, value); } catch (error) { /* ignore */ }
+        }
+        function sessionRemove(key) {
+            try { sessionStorage.removeItem(key); } catch (error) { /* ignore */ }
+        }
+
+        // null when fresh; { kind: 'setup' } when no list has been loaded;
+        // { kind: 'stale', days } when the last import is over a month old.
+        function getResidentListStatus() {
+            const db = window.starWrenchResidentDB;
+            if (!db) return null;
+            if (db.getCount() === 0) return { kind: 'setup' };
+            const lastUpdated = db.getLastUpdated ? db.getLastUpdated() : null;
+            if (!lastUpdated || isNaN(lastUpdated.getTime())) return { kind: 'stale', days: null };
+            const staleFrom = new Date(lastUpdated.getTime());
+            staleFrom.setMonth(staleFrom.getMonth() + 1);
+            if (Date.now() <= staleFrom.getTime()) return null;
+            return { kind: 'stale', days: Math.floor((Date.now() - lastUpdated.getTime()) / 86400000) };
+        }
+
+        function lastUpdatedText(status) {
+            return status.days === null ? 'Last update unknown.' : 'Last updated ' + status.days + ' days ago.';
+        }
+
+        function isOnDirectoryPage() {
+            return /\/starrezweb\/main\/directory\/?$/i.test(window.location.pathname);
+        }
+
+        // Navigates like the bookmarks do: StarRez's in-page module navigation,
+        // closing any open detail screens first. Falls back to a page load.
+        function goToDirectoryForUpdate() {
+            try {
+                if (typeof starrez !== 'undefined' && starrez.mm && starrez.mm.NavigateTo) {
+                    if (window.location.hash && window.location.hash.startsWith('#!') && starrez.sm && starrez.sm.CloseAllDetailScreens) {
+                        starrez.sm.CloseAllDetailScreens().done(() => {
+                            starrez.mm.NavigateTo('main', 'directory');
+                        });
+                    } else {
+                        starrez.mm.NavigateTo('main', 'directory');
+                    }
+                } else {
+                    window.location.href = DIRECTORY_URL;
+                }
+            } catch (error) {
+                console.error('[QuickAccess] In-page navigation failed, reloading instead:', error);
+                window.location.href = DIRECTORY_URL;
+            }
+            // The URL changes without a page load, so update the tooltip once it does
+            setTimeout(refreshResidentListNotices, 500);
+        }
+
+        function injectFreshnessStyles() {
+            if (document.getElementById('starwrench-freshness-styles')) return;
+            const style = document.createElement('style');
+            style.id = 'starwrench-freshness-styles';
+            style.textContent = `
+                #starwrench-stale-tooltip {
+                    position: fixed;
+                    z-index: 99999; /* below the Lookup modal (100000) */
+                    width: 240px;
+                    padding: 8px 26px 8px 10px;
+                    background: #fff3cd;
+                    border: 1px solid #ffe69c;
+                    border-radius: 6px;
+                    color: #664d03;
+                    font-size: 13px;
+                    line-height: 1.4;
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                    box-sizing: border-box;
+                }
+                #starwrench-stale-tooltip * {
+                    color: #664d03;
+                }
+                #starwrench-stale-tooltip.collapsed {
+                    cursor: pointer;
+                }
+                #starwrench-stale-tooltip.collapsed:hover {
+                    background: #ffecb5;
+                }
+                /* The whole collapsed tooltip is the click target — text and
+                   children never swallow the click. */
+                #starwrench-stale-tooltip.collapsed *:not(.starwrench-freshness-close) {
+                    pointer-events: none;
+                }
+                #starwrench-stale-tooltip::before,
+                #starwrench-stale-tooltip::after {
+                    content: '';
+                    position: absolute;
+                    left: var(--sw-arrow-left, 50%);
+                    transform: translateX(-50%);
+                    border: 8px solid transparent;
+                    border-top: none;
+                }
+                #starwrench-stale-tooltip::before {
+                    top: -8px;
+                    border-bottom-color: #ffe69c;
+                }
+                #starwrench-stale-tooltip::after {
+                    top: -7px;
+                    border-bottom-color: #fff3cd;
+                }
+                #starwrench-stale-tooltip .starwrench-tooltip-title {
+                    display: block;
+                    font-weight: bold;
+                }
+                #starwrench-stale-tooltip ol {
+                    margin: 4px 0 8px;
+                    padding-left: 18px;
+                }
+                #starwrench-stale-tooltip .starwrench-tooltip-download {
+                    background-color: #f0ad4e;
+                    color: #fff;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 5px 12px;
+                    font-size: 13px;
+                    font-weight: 600;
+                    cursor: pointer;
+                }
+                #starwrench-stale-tooltip .starwrench-tooltip-download:hover {
+                    background-color: #ec971f;
+                }
+                .starwrench-freshness-close {
+                    position: absolute;
+                    top: 4px;
+                    right: 6px;
+                    background: none;
+                    border: none;
+                    font-size: 16px;
+                    line-height: 1;
+                    cursor: pointer;
+                    padding: 2px 4px;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        function positionStaleTooltip(tooltip, button) {
+            const rect = button.getBoundingClientRect();
+            const width = tooltip.offsetWidth || 240;
+            const center = rect.left + rect.width / 2;
+            const left = Math.max(8, Math.min(center - width / 2, window.innerWidth - width - 8));
+            tooltip.style.left = left + 'px';
+            tooltip.style.top = (rect.bottom + 10) + 'px';
+            tooltip.style.setProperty('--sw-arrow-left', (center - left) + 'px');
+        }
+
+        function triggerDirectoryCsvExport() {
+            // Clicks StarRez's own "Print View as Report → CSV" menu item, just
+            // as a user would; it exports the current filtered view.
+            const link = document.querySelector('.ui-print-list[data-filetype="CSV"]');
+            if (!link) {
+                const message = 'Could not find the CSV export. Use the options menu (⋮) → Print View as Report → CSV instead.';
+                if (typeof starrez !== 'undefined' && starrez.ui && starrez.ui.ShowAlertMessage) {
+                    starrez.ui.ShowAlertMessage(message, 'Error');
+                } else {
+                    alert(message);
+                }
+                return;
+            }
+            link.click();
+            // Open Lookup, ready for the downloaded CSV to be dropped onto it.
+            // The export opens in a new tab, so give it a moment first.
+            if (lookupSearch) setTimeout(lookupSearch.openModal, 500);
+        }
+
+        function createTooltipCloseButton(tooltip) {
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'starwrench-freshness-close';
+            close.setAttribute('aria-label', 'Dismiss');
+            close.textContent = '×';
+            close.addEventListener('click', function(e) {
+                e.stopPropagation();
+                sessionSet(STALE_TOOLTIP_DISMISSED_KEY, 'true');
+                tooltip.remove();
+            });
+            return close;
+        }
+
+        function fillCollapsedTooltip(tooltip, status) {
+            const title = document.createElement('span');
+            title.className = 'starwrench-tooltip-title';
+            const body = document.createElement('span');
+            if (status.kind === 'setup') {
+                title.textContent = 'Set up Lookup';
+                body.textContent = 'Click to load your resident list.';
+            } else {
+                title.textContent = 'Resident list out of date';
+                body.textContent = lastUpdatedText(status) + ' Click to update.';
+            }
+            tooltip.appendChild(title);
+            tooltip.appendChild(body);
+        }
+
+        function fillExpandedTooltip(tooltip, status) {
+            const title = document.createElement('span');
+            title.className = 'starwrench-tooltip-title';
+            title.textContent = status.kind === 'setup' ? 'Set up Lookup' : 'Update resident list';
+
+            const steps = document.createElement('ol');
+            ['Filter this list to the residents you want.', 'Click Download CSV.', 'Drag the file onto Lookup.'].forEach(function(step) {
+                const li = document.createElement('li');
+                li.textContent = step;
+                steps.appendChild(li);
+            });
+
+            const download = document.createElement('button');
+            download.type = 'button';
+            download.className = 'starwrench-tooltip-download';
+            download.textContent = 'Download CSV';
+            download.addEventListener('click', triggerDirectoryCsvExport);
+
+            tooltip.appendChild(title);
+            tooltip.appendChild(steps);
+            tooltip.appendChild(download);
+        }
+
+        function updateStaleTooltip(status) {
+            const button = document.getElementById('starwrench-search-hint');
+            let tooltip = document.getElementById('starwrench-stale-tooltip');
+
+            // Expanded (with the Download CSV button) on the directory, where
+            // the export lives; collapsed everywhere else.
+            const expanded = isOnDirectoryPage();
+            const show = status && button && !sessionGet(STALE_TOOLTIP_DISMISSED_KEY);
+            if (!show) {
+                if (tooltip) tooltip.remove();
+                return;
+            }
+
+            const stateKey = (expanded ? 'expanded:' : 'collapsed:') + status.kind + ':' + status.days;
+            if (!tooltip || tooltip.getAttribute('data-state') !== stateKey) {
+                if (tooltip) tooltip.remove();
+                tooltip = document.createElement('div');
+                tooltip.id = 'starwrench-stale-tooltip';
+                tooltip.setAttribute('data-state', stateKey);
+
+                if (expanded) {
+                    fillExpandedTooltip(tooltip, status);
+                } else {
+                    tooltip.className = 'collapsed';
+                    tooltip.setAttribute('role', 'button');
+                    tooltip.setAttribute('tabindex', '0');
+                    fillCollapsedTooltip(tooltip, status);
+                    tooltip.addEventListener('click', goToDirectoryForUpdate);
+                    tooltip.addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            goToDirectoryForUpdate();
+                        }
+                    });
+                }
+                tooltip.appendChild(createTooltipCloseButton(tooltip));
+                document.body.appendChild(tooltip);
+            }
+
+            positionStaleTooltip(tooltip, button);
+        }
+
+        function refreshResidentListNotices() {
+            try {
+                const status = getResidentListStatus();
+                updateStaleTooltip(status);
+            } catch (error) {
+                console.error('[QuickAccess] Error updating resident list notices:', error);
+            }
+        }
+
+        function onResidentListImported() {
+            sessionRemove(STALE_TOOLTIP_DISMISSED_KEY);
+            if (lookupSearch) lookupSearch.updateFooter();
+            refreshResidentListNotices();
+        }
+
+        function initResidentListNotices(instantSearch) {
+            lookupSearch = instantSearch;
+            injectFreshnessStyles();
+            refreshResidentListNotices();
+            setInterval(refreshResidentListNotices, 2000);
+            window.addEventListener('resize', refreshResidentListNotices);
+        }
+
         // Initialize the plugin
         function initialize() {
             // Inject styles immediately
@@ -3652,6 +3984,8 @@
                     setTimeout(() => addSearchHint(instantSearch), 500);
                 }
             }, 100);
+
+            setTimeout(() => initResidentListNotices(instantSearch), 800);
         }
 
         initialize();
