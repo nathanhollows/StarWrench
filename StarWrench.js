@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.26.0
+// @version      1.26.1
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.26.0';
+    const SUITE_VERSION = '1.26.1';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -5417,36 +5417,60 @@
             }
         }
 
-        function openAddViolationWizard(button) {
-            try {
-                const $link = document.querySelector('a[data-uit="Violation"][data-methodname="NewIncidentViolation"][data-sourcetable="Incident"]');
-                if (!$link) {
-                    console.error('[ViolationChecker] Could not find the Violation wizard link');
-                    showError('Could not find the "Add Violation" option. Please use the New menu instead.');
-                    if (button) button.disabled = false;
-                    return;
-                }
-                $link.click();
-            } catch (error) {
-                console.error('[ViolationChecker] Error opening violation wizard:', error);
-                if (button) button.disabled = false;
+        // Find the New menu's "Violation" item by its caption, scoped to the
+        // current incident screen (StarRez keeps other records open in the
+        // background). Covers the habitat menu (<habitat-menu-button-item
+        // caption="Violation">, which StarRez binds its click handler to),
+        // the older <a data-uit="Violation"> list, and the rendered rows in
+        // the menu's shadow DOM.
+        function findViolationMenuItem() {
+            const incidentId = getCurrentIncidentId();
+            const scope = (incidentId && document.getElementById('incident' + incidentId + '-detail-screen')) || document;
+
+            const $items = scope.querySelectorAll('habitat-menu-button-item, a[data-uit]');
+            for (let i = 0; i < $items.length; i++) {
+                const label = $items[i].getAttribute('caption') || $items[i].getAttribute('data-uit') || $items[i].textContent || '';
+                if (label.trim().toLowerCase() === 'violation') return $items[i];
             }
+            // Shadow-DOM rows: only search inside habitat menus, as this runs on
+            // every check pass
+            const $menus = scope.querySelectorAll('habitat-menu-button');
+            for (let i = 0; i < $menus.length; i++) {
+                const $row = findMenuRowByText($menus[i].shadowRoot || $menus[i], 'violation');
+                if ($row) return $row;
+            }
+            return null;
         }
 
-        // Find StarRez's "Multiple Participants" menu row, which lives in
-        // the shadow DOM of the New menu's habitat components.
-        function findMultipleParticipantsRow(root) {
+        // Simulates a click on StarRez's own New → Violation menu item.
+        function openAddViolationWizard(button) {
+            try {
+                const $item = findViolationMenuItem();
+                if (!$item) {
+                    // Menu item gone (or not loaded): quietly drop the button
+                    if (button) button.remove();
+                    return;
+                }
+                $item.click();
+            } catch (error) {
+                console.error('[ViolationChecker] Error opening violation wizard:', error);
+            }
+            if (button) setTimeout(() => { button.disabled = false; }, 1000);
+        }
+
+        // Find a menu row by its label in the shadow DOM of habitat menus.
+        function findMenuRowByText(root, text) {
             const $rows = root.querySelectorAll('.row[role="menuitem"]');
             for (let i = 0; i < $rows.length; i++) {
                 const $span = $rows[i].querySelector(':scope > span');
-                if ($span && $span.textContent.trim() === 'Multiple Participants') {
+                if ($span && $span.textContent.trim().toLowerCase() === text) {
                     return $rows[i];
                 }
             }
             const $all = root.querySelectorAll('*');
             for (let i = 0; i < $all.length; i++) {
                 if ($all[i].shadowRoot) {
-                    const $found = findMultipleParticipantsRow($all[i].shadowRoot);
+                    const $found = findMenuRowByText($all[i].shadowRoot, text);
                     if ($found) return $found;
                 }
             }
@@ -5470,7 +5494,7 @@
                     return;
                 }
 
-                const $row = findMultipleParticipantsRow(document);
+                const $row = findMenuRowByText(document, 'multiple participants');
                 if (!$row) {
                     console.error('[ViolationChecker] Could not find the Multiple Participants wizard');
                     showError('Could not find the "Multiple Participants" option. Please use the New menu instead.');
@@ -5493,7 +5517,9 @@
                 section: 'Violations',
                 text: 'This incident has no Violation recorded.',
                 buttonLabel: 'Add Violation',
-                onClick: openAddViolationWizard
+                onClick: openAddViolationWizard,
+                // Only offer the button when the New menu has a Violation item
+                findTarget: findViolationMenuItem
             },
             {
                 key: 'participants',
@@ -5509,10 +5535,38 @@
             document.querySelectorAll(selector).forEach($el => $el.remove());
         }
 
+        function createAlertButton(check) {
+            const $button = document.createElement('button');
+            $button.type = 'button';
+            $button.textContent = check.buttonLabel;
+            $button.addEventListener('click', () => {
+                $button.disabled = true;
+                check.onClick($button);
+            });
+            return $button;
+        }
+
+        // Checks with a findTarget only show their button while the target
+        // exists; re-evaluated every pass since StarRez loads the New menu
+        // after the screen.
+        function syncAlertButton($alert, check) {
+            if (!check.findTarget) return;
+            const $button = $alert.querySelector('button');
+            const available = !!check.findTarget();
+            if (available && !$button) {
+                $alert.appendChild(createAlertButton(check));
+            } else if (!available && $button) {
+                $button.remove();
+            }
+        }
+
         function ensureAlert(incidentId, check, $after) {
             const existingId = `starwrench-${check.key}-alert-${incidentId}`;
             const $existing = document.getElementById(existingId);
-            if ($existing) return $existing;
+            if ($existing) {
+                syncAlertButton($existing, check);
+                return $existing;
+            }
 
             // Remove any stale alerts of this kind for other incidents first
             removeAlert(check.key);
@@ -5528,16 +5582,10 @@
             $text.className = 'starwrench-violation-alert-text';
             $text.textContent = check.text;
 
-            const $button = document.createElement('button');
-            $button.type = 'button';
-            $button.textContent = check.buttonLabel;
-            $button.addEventListener('click', () => {
-                $button.disabled = true;
-                check.onClick($button);
-            });
-
             $alert.appendChild($text);
-            $alert.appendChild($button);
+            if (!check.findTarget || check.findTarget()) {
+                $alert.appendChild(createAlertButton(check));
+            }
 
             $after.parentNode.insertBefore($alert, $after.nextSibling);
             return $alert;

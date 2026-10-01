@@ -4,6 +4,11 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.26.1] - 2026-10-01
+
+### Fixed
+- Incident Checker: the "Add Violation" button works with StarRez's new habitat New menu. It finds the menu item captioned "Violation" (habitat menu item, older menu link, or the rendered shadow-DOM row) and clicks it. If there's no such item, the alert shows without the button instead of erroring.
+
 ## [1.26.0] - 2026-10-01
 
 ### Added
