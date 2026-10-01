@@ -4,6 +4,11 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.26.2] - 2026-10-01
+
+### Fixed
+- Incident Checker: the missing-participants alert no longer relies on the sidebar's Participants link, which not all staff can see. It now checks the Participants block on the incident's Quick Information page (the Quick Add search box, or any participant row), still using the sidebar link as an extra signal where it's visible.
+
 ## [1.26.1] - 2026-10-01
 
 ### Fixed
