@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.26.1
+// @version      1.26.2
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.26.1';
+    const SUITE_VERSION = '1.26.2';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -5509,6 +5509,33 @@
             }
         }
 
+        // Not every staff member can see the sidebar's Participants section,
+        // but everyone sees the Participants block on Quick Information, which
+        // StarRez only renders when the incident has participants. Returns
+        // true/false, or null until the Quick Information content has loaded.
+        // Scoped to the current incident screen (other incidents stay open in
+        // the background).
+        function hasParticipantsOnPage() {
+            const incidentId = getCurrentIncidentId();
+            const $screen = incidentId && document.getElementById('incident' + incidentId + '-detail-screen');
+            if (!$screen || !$screen.querySelector('.fieldset-block')) return null;
+
+            // Quick Add's search box and Auto Add button only ever live inside
+            // the Participants block, so their presence is a sure "has
+            // participants" signal.
+            if ($screen.querySelector('.starwrench-quick-participants-search')) return true;
+
+            const $captions = $screen.querySelectorAll('.fieldset-block .caption');
+            for (let i = 0; i < $captions.length; i++) {
+                if ($captions[i].textContent.trim() !== 'Participants') continue;
+                const $block = $captions[i].closest('.fieldset-block');
+                if ($block && $block.querySelector('span.field[data-name="IncidentEntryID"]')) return true;
+            }
+
+            // Staff who can see the sidebar section get that signal too
+            return hasSectionRecords('Participants') === true;
+        }
+
         // One alert per section that must have at least one record.
         // Order here is the order the alerts are shown in.
         const CHECKS = [
@@ -5523,7 +5550,7 @@
             },
             {
                 key: 'participants',
-                section: 'Participants',
+                hasRecords: hasParticipantsOnPage,
                 text: 'This incident has no Participants recorded. Participants must be added manually',
                 buttonLabel: 'Add Participants',
                 onClick: openAddParticipantsWizard
@@ -5602,8 +5629,8 @@
                 let $after = null;
                 for (let i = 0; i < CHECKS.length; i++) {
                     const check = CHECKS[i];
-                    const hasRecords = hasSectionRecords(check.section);
-                    if (hasRecords === null) return; // screen not ready yet
+                    const hasRecords = check.hasRecords ? check.hasRecords() : hasSectionRecords(check.section);
+                    if (hasRecords === null) continue; // screen not ready yet
                     if (hasRecords) {
                         removeAlert(check.key);
                         continue;
