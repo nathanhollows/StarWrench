@@ -4,6 +4,18 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.26.0] - 2026-10-01
+
+### Added
+- Quick Access: when the resident list hasn't been set up yet, or is more than a month old, a small yellow tooltip hangs below the Lookup button ("Set up Lookup" / "Resident list out of date"). Clicking it goes to the entries directory (Main → Entries); there the tooltip is always expanded into three short steps and a **Download CSV** button, which clicks StarRez's own Print View as Report → CSV menu item for the current view and then opens Lookup ready for the CSV to be dropped onto it. The × hides the tooltip for the rest of the browser session, and it disappears after a successful import.
+- Quick Access: the Lookup window's footer now shows when the resident list was last updated ("Last updated 12 days ago") instead of the export instructions.
+- Resident database: `window.starWrenchResidentDB.getLastUpdated()` returns the time of the last CSV import.
+
+## [1.25.0] - 2026-10-01
+
+### Changed
+- Resident database: importing a CSV now replaces the resident list instead of merging into it — residents not in the CSV are removed. The import summary shows Added, Updated, Removed and the new Total. A CSV with no resident rows is rejected and leaves the database unchanged.
+
 ## [1.24.0] - 2026-10-01
 
 ### Changed
