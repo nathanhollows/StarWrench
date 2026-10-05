@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.26.2
+// @version      1.26.3
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.26.2';
+    const SUITE_VERSION = '1.26.3';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -2535,8 +2535,6 @@
 
         // Initialize
         loadDatabase();
-
-        console.log(`[ResidentDB] Loaded ${Object.keys(residentDB).length} residents from storage`);
     }
 
     // QUICK ACCESS PLUGIN
@@ -4267,6 +4265,50 @@
             return Array.from(ids);
         }
 
+        // StarRez's short date format (a moment.js pattern, e.g. "D/MM/YYYY"),
+        // which differs between users/cultures. null if unavailable.
+        function getShortDateFormat() {
+            try {
+                if (typeof starrez !== 'undefined' && starrez.GetSystemOptions) {
+                    const format = starrez.GetSystemOptions().ShortDateFormat;
+                    if (typeof format === 'string' && format) return format;
+                }
+            } catch (error) { /* fall through */ }
+            return null;
+        }
+
+        function makeDate(year, month, day) {
+            if (year < 100) year += 2000;
+            if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+            const date = new Date(year, month - 1, day);
+            return date.getMonth() === month - 1 ? date : null;
+        }
+
+        // Parse a date shown in StarRez: ISO ("2026-10-01"), numeric in the
+        // user's format ("1/10/2026" — day-first unless the format is
+        // month-first), or anything else moment.js can read with the format.
+        function parseDisplayDate(text) {
+            if (!text) return null;
+            const iso = text.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+            if (iso) return makeDate(parseInt(iso[1], 10), parseInt(iso[2], 10), parseInt(iso[3], 10));
+
+            const format = getShortDateFormat();
+            const numeric = text.match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4}|\d{2})\b/);
+            if (numeric) {
+                const a = parseInt(numeric[1], 10);
+                const b = parseInt(numeric[2], 10);
+                const year = parseInt(numeric[3], 10);
+                const monthFirst = !!format && /^[^DdMm]*M/.test(format);
+                return monthFirst ? makeDate(year, a, b) : makeDate(year, b, a);
+            }
+
+            if (format && typeof moment !== 'undefined') {
+                const parsed = moment(text.trim(), format);
+                if (parsed.isValid()) return parsed.startOf('day').toDate();
+            }
+            return null;
+        }
+
         // The report's date: the "Date" display field (shift reports), falling
         // back to the date in the detail menu's breadcrumb (incidents, e.g.
         // "Flat Meeting (EH-21U) , 2026-09-29 6:30 pm").
@@ -4280,8 +4322,8 @@
                 candidates.push(el.getAttribute('data-crumb'));
             });
             for (let i = 0; i < candidates.length; i++) {
-                const match = (candidates[i] || '').match(/(\d{4})-(\d{2})-(\d{2})/);
-                if (match) return new Date(parseInt(match[1], 10), parseInt(match[2], 10) - 1, parseInt(match[3], 10));
+                const date = parseDisplayDate(candidates[i]);
+                if (date) return date;
             }
             return null;
         }

@@ -4,6 +4,12 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.26.3] - 2026-10-02
+
+### Fixed
+- Quick Add Participants: Auto Add now reads report dates in the user's StarRez date format (e.g. "1/10/2026"), not just "2026-10-01". Previously, users with a different date format got "Auto Add only works within a week of the report date" on every report and nothing was added.
+- Resident database: removed the "[ResidentDB] Loaded N residents from storage" console message on every page load.
+
 ## [1.26.2] - 2026-10-01
 
 ### Fixed
