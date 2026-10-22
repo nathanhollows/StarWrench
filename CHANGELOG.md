@@ -4,6 +4,11 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.26.4] - 2026-10-22
+
+### Fixed
+- Copy Entry IDs: the clipboard button now also appears on StarQL report panels (and other panels that load their tables late) once their Entry links are present.
+
 ## [1.26.3] - 2026-10-02
 
 ### Fixed

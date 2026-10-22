@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.26.3
+// @version      1.26.4
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.26.3';
+    const SUITE_VERSION = '1.26.4';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -286,15 +286,10 @@
     // SHARED: STARREZ RECORD ROLLOVER
     // ================================
 
-    // Mirrors StarRez's own hover rollover for `.ui-open-detailscreen` links
-    // — entries, incidents, anything with a detail screen
-    // (starrez.rollover.DisplayRolloverOnHover in starrez.min.js). We can't
-    // just add that class: StarRez binds it as a jQuery delegate on
-    // `document`, which never sees links inside habitat-display shadow
-    // roots, and it would also wire up StarRez's own detail-screen click
-    // handler. So we reuse the same pieces (<Controller>/SummaryView request,
-    // #srw_container, PositionMe) with per-link listeners instead.
-    const ROLLOVER_DELAY_MS = 200; // StarRez's StandardRollOverDelay
+    // Hover rollover for record links (entries, incidents, anything with a
+    // detail screen). Uses per-link listeners so it also works for links
+    // inside habitat-display shadow roots.
+    const ROLLOVER_DELAY_MS = 200;
     let rolloverTimer = null;
     let rolloverHoverLink = null;
     let $rolloverEl = null;
@@ -335,8 +330,6 @@
         }
     }
 
-    // Same approach StarRez takes: Entry.SummaryView is just a generic
-    // SummaryView action whose Area/Controller get swapped per record type.
     // zIndex: the instant-search modal sits above #srw_container, so callers
     // rendering inside an overlay have to lift the popup to stay visible.
     function attachRecordRollover(link, dbObjectName, recordId, zIndex) {
@@ -529,10 +522,8 @@
         }
 
         async function loadAllRecordsViaApi(dashboardItem) {
-            // Drive StarRez's own ActiveTable manager: it tracks currentPage,
-            // PagingObject, columnSorting, and isLoading per table, so by
-            // reusing it we stay in sync with the server's view of pagination
-            // and don't have to reverse-engineer the pageNo offset.
+            // Page the table through its own manager so pagination state stays
+            // in sync with the page.
             const table = dashboardItem.querySelector('table.ui-active-table');
             if (!table) return false;
 
@@ -767,6 +758,19 @@
         }
 
         setTimeout(processAllDashboardItems, 1000);
+
+        // Panels such as StarQL queries load their tables asynchronously, so also
+        // add the button to any panel that has Entry links but no button yet.
+        let clipboardScanTimer = null;
+        new MutationObserver(() => {
+            if (clipboardScanTimer) return;
+            clipboardScanTimer = setTimeout(() => {
+                clipboardScanTimer = null;
+                document.querySelectorAll('.dashboard-item').forEach(item => {
+                    if (!item.querySelector('.clipboard-copy-btn')) addClipboardButton(item);
+                });
+            }, 500);
+        }).observe(document.body, { childList: true, subtree: true });
 
         // Monitor for changes
         let currentUrl = window.location.href;
