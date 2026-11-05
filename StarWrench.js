@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.26.4
+// @version      1.26.5
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.26.4';
+    const SUITE_VERSION = '1.26.5';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -934,20 +934,34 @@
         }
 
         const FOOTER_ORIGINAL_ATTRIBUTE = 'data-sw-original-footer';
+        const footerLastWritten = new WeakMap();
 
         function updateFooterCount(dashboardItem, query, visible) {
             const footer = dashboardItem.querySelector('.dashboard-footer');
             if (!footer) return;
 
-            // Cache StarRez's own text (e.g. "Records: 275") the first time we
-            // see this footer, so we can restore it once the search clears.
-            // A freshly rendered footer (new dashboard, re-navigation) won't
-            // have this attribute yet, so it re-captures automatically.
-            if (!footer.hasAttribute(FOOTER_ORIGINAL_ATTRIBUTE)) {
-                footer.setAttribute(FOOTER_ORIGINAL_ATTRIBUTE, footer.textContent);
+            // Cache StarRez's own text (e.g. "Records: 275"). Only trust text
+            // we did not write ourselves: if the footer's current text differs
+            // from our last write, StarRez re-rendered it, so refresh the
+            // cache. Empty text is never cached (an empty cache made the
+            // footer vanish when a search was cleared).
+            const current = footer.textContent;
+            if (current && current !== footerLastWritten.get(footer)) {
+                footer.setAttribute(FOOTER_ORIGINAL_ATTRIBUTE, current);
             }
 
-            const desired = query ? `Records: ${visible}` : footer.getAttribute(FOOTER_ORIGINAL_ATTRIBUTE);
+            let desired;
+            if (query) {
+                desired = `Records: ${visible}`;
+            } else {
+                desired = footer.getAttribute(FOOTER_ORIGINAL_ATTRIBUTE);
+                if (!desired) {
+                    const total = getExpectedCount(dashboardItem) ||
+                        dashboardItem.querySelectorAll('tbody tr[data-recordid]').length;
+                    desired = `Records: ${total}`;
+                }
+            }
+            footerLastWritten.set(footer, desired);
 
             // Mutate the existing text node's data in place instead of
             // reassigning textContent. textContent always removes and

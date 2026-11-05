@@ -4,6 +4,11 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.26.5] - 2026-11-06
+
+### Fixed
+- Dashboard search: the "Records: N" footer count no longer disappears (or shows a stale number) after a search is cleared or cancelled. It is restored to the panel's original total.
+
 ## [1.26.4] - 2026-10-22
 
 ### Fixed
