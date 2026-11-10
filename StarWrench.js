@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.26.5
+// @version      1.27.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.26.5';
+    const SUITE_VERSION = '1.27.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -74,6 +74,11 @@
                 enabled: true,
                 name: '📜 Field History',
                 description: 'Adds a clean, gridded breakdown row under every entry in any Log Activities table, with resolved lookup labels. Click a field name to see its full history in a focused popup, instead of opening StarRez\'s View modal one row at a time'
+            },
+            taskNavigator: {
+                enabled: true,
+                name: '⏭️ Task Navigator',
+                description: 'Adds previous/next arrows (and ←/→ keys) to the View Task popup so you can step through a contribution\'s tasks without closing and reopening each one'
             }
         }
     };
@@ -6826,6 +6831,179 @@
     }
 
     // ================================
+    // TASK NAVIGATOR PLUGIN
+    // ================================
+
+    function initTaskNavigatorPlugin() {
+        if (window.__swTaskNavigatorInit) return;
+        window.__swTaskNavigatorInit = true;
+
+        const STYLE_ID = 'sw-task-nav-styles';
+        if (!document.getElementById(STYLE_ID)) {
+            const styles = document.createElement('style');
+            styles.id = STYLE_ID;
+            styles.textContent = `
+                .sw-task-nav-btn {
+                    position: fixed; z-index: 100000; width: 44px; height: 64px;
+                    border: none; border-radius: 6px; cursor: pointer;
+                    background: rgba(20, 40, 60, .85); color: #fff;
+                    font-size: 26px; line-height: 1; box-shadow: 0 2px 8px rgba(0,0,0,.3);
+                }
+                .sw-task-nav-btn:hover:not(:disabled) { background: #056bb3; }
+                .sw-task-nav-btn:disabled { opacity: .3; cursor: default; }
+                .sw-task-nav-count {
+                    position: fixed; z-index: 100000; padding: 2px 10px;
+                    border-radius: 10px; background: rgba(20, 40, 60, .85);
+                    color: #fff; font-size: 12px; pointer-events: none;
+                }
+            `;
+            document.head.appendChild(styles);
+        }
+
+        let busy = false;
+        let ui = null; // { popup, prev, next, count }
+
+        function findTaskPopup() {
+            const popups = document.querySelectorAll('section.ui-popup-container');
+            for (let i = 0; i < popups.length; i++) {
+                const p = popups[i];
+                const header = p.querySelector('.ui-popup-header');
+                if (header && /^\s*View Task\s*$/i.test(header.textContent) && getTaskId(p)) return p;
+            }
+            return null;
+        }
+
+        function getTaskId(popup) {
+            const input = popup.querySelector('input[name="TaskID"]');
+            return input ? input.value : null;
+        }
+
+        function getRowCells() {
+            return Array.prototype.slice.call(
+                document.querySelectorAll('td.ui-view-item-button[data-controller="ContributionTask"]')
+            );
+        }
+
+        function getPosition(popup) {
+            const id = getTaskId(popup);
+            const cells = getRowCells();
+            for (let i = 0; i < cells.length; i++) {
+                if (cells[i].getAttribute('data-id') === id) return { index: i, cells: cells };
+            }
+            return null;
+        }
+
+        function isEditing(popup) {
+            const form = popup.querySelector('.js-form');
+            return !!form && form.getAttribute('data-editmode') === 'True';
+        }
+
+        function removeUi() {
+            if (!ui) return;
+            [ui.prev, ui.next, ui.count].forEach(el => el.parentNode && el.parentNode.removeChild(el));
+            ui = null;
+        }
+
+        function position() {
+            if (!ui) return;
+            const r = ui.popup.getBoundingClientRect();
+            const mid = r.top + r.height / 2;
+            ui.prev.style.left = Math.max(4, r.left - 54) + 'px';
+            ui.prev.style.top = (mid - 32) + 'px';
+            ui.next.style.left = Math.min(window.innerWidth - 48, r.right + 10) + 'px';
+            ui.next.style.top = (mid - 32) + 'px';
+            ui.count.style.left = (r.left + r.width / 2 - 25) + 'px';
+            ui.count.style.top = Math.max(4, r.top - 26) + 'px';
+        }
+
+        function buildUi(popup) {
+            const pos = getPosition(popup);
+            if (!pos) return;
+            removeUi();
+            const mk = (cls, text, title) => {
+                const b = document.createElement('button');
+                b.type = 'button'; b.className = cls; b.textContent = text; b.title = title;
+                document.body.appendChild(b);
+                return b;
+            };
+            const prev = mk('sw-task-nav-btn', '‹', 'Previous task (←)');
+            const next = mk('sw-task-nav-btn', '›', 'Next task (→)');
+            const count = document.createElement('div');
+            count.className = 'sw-task-nav-count';
+            count.textContent = (pos.index + 1) + ' / ' + pos.cells.length;
+            document.body.appendChild(count);
+            prev.disabled = pos.index === 0;
+            next.disabled = pos.index === pos.cells.length - 1;
+            prev.addEventListener('click', () => navigate(-1));
+            next.addEventListener('click', () => navigate(1));
+            ui = { popup, prev, next, count };
+            position();
+            // The popup animates in, so re-measure a few times
+            [100, 300, 600].forEach(ms => setTimeout(position, ms));
+        }
+
+        function navigate(dir) {
+            if (busy) return;
+            const popup = findTaskPopup();
+            if (!popup || isEditing(popup)) return;
+            const pos = getPosition(popup);
+            if (!pos) return;
+            const target = pos.cells[pos.index + dir];
+            if (!target) return;
+
+            busy = true;
+            const closeBtn = popup.querySelector('.ui-btn-cancelpopup');
+            if (!closeBtn) { busy = false; return; }
+            closeBtn.click();
+
+            // Wait for the old popup to leave the DOM, then open the next task
+            const started = Date.now();
+            const poll = setInterval(() => {
+                const gone = !document.body.contains(popup);
+                if (gone || Date.now() - started > 2000) {
+                    clearInterval(poll);
+                    try {
+                        target.click();
+                    } catch (e) {
+                        console.error('[StarWrench] Task navigator failed to open task:', e);
+                    }
+                    setTimeout(() => { busy = false; }, 150);
+                }
+            }, 30);
+        }
+
+        function sync() {
+            const popup = findTaskPopup();
+            if (!popup) { removeUi(); return; }
+            if (ui && ui.popup === popup) return;
+            buildUi(popup);
+        }
+
+        let scheduled = false;
+        const observer = new MutationObserver(() => {
+            if (scheduled) return;
+            scheduled = true;
+            requestAnimationFrame(() => { scheduled = false; sync(); });
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        window.addEventListener('resize', position);
+
+        document.addEventListener('keydown', e => {
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+            if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+            if (!ui) return;
+            const t = e.target;
+            if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+            e.preventDefault();
+            navigate(e.key === 'ArrowLeft' ? -1 : 1);
+        }, true);
+
+        sync();
+        console.log('[StarWrench] Task Navigator initialized');
+    }
+
+    // ================================
     // PLUGIN INITIALIZATION
     // ================================
 
@@ -6874,6 +7052,9 @@
                 break;
             case 'changeLogBlame':
                 initChangeLogBlamePlugin();
+                break;
+            case 'taskNavigator':
+                initTaskNavigatorPlugin();
                 break;
         }
     }

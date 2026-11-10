@@ -4,6 +4,11 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.27.0] - 2026-11-11
+
+### Added
+- Task Navigator: the View Task popup now has previous/next arrow buttons on either side (plus a position counter and ←/→ keyboard shortcuts) to step through a contribution's tasks without closing and reopening each one. Disabled while editing a task.
+
 ## [1.26.5] - 2026-11-06
 
 ### Fixed
