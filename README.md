@@ -16,7 +16,7 @@ StarWrench is an unofficial and unaffiliated userscript with small quality of li
 - **⚠️ Incident Checker**: a reminder on an incident that is missing a violation or participants.
 - **📐 Layout Fixes**: tidier text areas, field widths and phone number formatting.
 - **📜 Field History**: a readable summary of changes in Log Activities tables.
-- **⏭️ Task Navigator**: previous/next arrows (and ←/→ keys) on the View Task popup to step through a contribution's tasks.
+- **⏭️ Record Navigator**: previous/next arrows (and ←/→ keys) on popups opened from a table row (tasks, actions, transactions, etc.) to step through the rows.
 
 ## Privacy
 

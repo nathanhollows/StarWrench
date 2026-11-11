@@ -4,6 +4,11 @@ All notable changes to StarWrench will be documented in this file.
 
 ## [Unreleased]
 
+## [1.28.0] - 2026-11-11
+
+### Changed
+- Task Navigator is now Record Navigator and works on popups opened from a table row (tasks, incident actions, account transactions, etc.), not just tasks, including the newer React-style grids. It steps through the rows of the list the popup was opened from, in their current sort order.
+
 ## [1.27.0] - 2026-11-11
 
 ### Added

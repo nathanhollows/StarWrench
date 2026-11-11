@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StarWrench
 // @namespace    http://tampermonkey.net/
-// @version      1.27.0
+// @version      1.28.0
 // @description  An opinionated and unofficial StarRez enhancement suite with toggleable features
 // @author       You
 // @match        https://vuw.starrezhousing.com/StarRezWeb/*
@@ -19,7 +19,7 @@
     // CONFIGURATION & CONSTANTS
     // ================================
 
-    const SUITE_VERSION = '1.27.0';
+    const SUITE_VERSION = '1.28.0';
     const SETTINGS_KEY = 'starWrenchEnhancementSuiteSettings';
 
     // Default settings for all plugins
@@ -75,10 +75,10 @@
                 name: '📜 Field History',
                 description: 'Adds a clean, gridded breakdown row under every entry in any Log Activities table, with resolved lookup labels. Click a field name to see its full history in a focused popup, instead of opening StarRez\'s View modal one row at a time'
             },
-            taskNavigator: {
+            recordNavigator: {
                 enabled: true,
-                name: '⏭️ Task Navigator',
-                description: 'Adds previous/next arrows (and ←/→ keys) to the View Task popup so you can step through a contribution\'s tasks without closing and reopening each one'
+                name: '⏭️ Record Navigator',
+                description: 'Adds previous/next arrows (and ←/→ keys) to popups opened from a table row (tasks, actions, transactions, etc.) so you can step through the rows without closing and reopening each one'
             }
         }
     };
@@ -6831,27 +6831,27 @@
     }
 
     // ================================
-    // TASK NAVIGATOR PLUGIN
+    // RECORD NAVIGATOR PLUGIN
     // ================================
 
-    function initTaskNavigatorPlugin() {
-        if (window.__swTaskNavigatorInit) return;
-        window.__swTaskNavigatorInit = true;
+    function initRecordNavigatorPlugin() {
+        if (window.__swRecordNavigatorInit) return;
+        window.__swRecordNavigatorInit = true;
 
-        const STYLE_ID = 'sw-task-nav-styles';
+        const STYLE_ID = 'sw-record-nav-styles';
         if (!document.getElementById(STYLE_ID)) {
             const styles = document.createElement('style');
             styles.id = STYLE_ID;
             styles.textContent = `
-                .sw-task-nav-btn {
+                .sw-record-nav-btn {
                     position: fixed; z-index: 100000; width: 44px; height: 64px;
                     border: none; border-radius: 6px; cursor: pointer;
                     background: rgba(20, 40, 60, .85); color: #fff;
                     font-size: 26px; line-height: 1; box-shadow: 0 2px 8px rgba(0,0,0,.3);
                 }
-                .sw-task-nav-btn:hover:not(:disabled) { background: #056bb3; }
-                .sw-task-nav-btn:disabled { opacity: .3; cursor: default; }
-                .sw-task-nav-count {
+                .sw-record-nav-btn:hover:not(:disabled) { background: #056bb3; }
+                .sw-record-nav-btn:disabled { opacity: .3; cursor: default; }
+                .sw-record-nav-count {
                     position: fixed; z-index: 100000; padding: 2px 10px;
                     border-radius: 10px; background: rgba(20, 40, 60, .85);
                     color: #fff; font-size: 12px; pointer-events: none;
@@ -6860,42 +6860,96 @@
             document.head.appendChild(styles);
         }
 
+        // Two kinds of list are supported:
+        //  'td'   - classic StarRez tables: td.view-cell[data-controller][data-id]
+        //  'grid' - React grids: div[role=row][data-row-id] with a button in the
+        //           data-colfield="id" cell that opens the record
+        const CELL_SELECTOR = 'td.view-cell[data-controller][data-id]';
+        const GRID_ROW_SELECTOR = '[role="row"][data-row-id]';
+        const POPUP_MAX_DELAY_MS = 8000;
+        const BUTTON_TOP = 140; // px from the top of the viewport
+
         let busy = false;
-        let ui = null; // { popup, prev, next, count }
+        let pendingUntil = 0; // while navigating, the next popup may take a while to load
+        let ctx = null; // { kind, el, rowId, time } - the row the current popup was opened from
+        let ui = null;  // { popup, prev, next, count }
 
-        function findTaskPopup() {
-            const popups = document.querySelectorAll('section.ui-popup-container');
-            for (let i = 0; i < popups.length; i++) {
-                const p = popups[i];
-                const header = p.querySelector('.ui-popup-header');
-                if (header && /^\s*View Task\s*$/i.test(header.textContent) && getTaskId(p)) return p;
-            }
-            return null;
-        }
-
-        function getTaskId(popup) {
-            const input = popup.querySelector('input[name="TaskID"]');
-            return input ? input.value : null;
-        }
-
-        function getRowCells() {
-            return Array.prototype.slice.call(
-                document.querySelectorAll('td.ui-view-item-button[data-controller="ContributionTask"]')
+        function gridRows(grid) {
+            return Array.prototype.filter.call(
+                grid.querySelectorAll(GRID_ROW_SELECTOR),
+                r => r.getAttribute('data-row-id') !== 'header'
             );
         }
 
-        function getPosition(popup) {
-            const id = getTaskId(popup);
-            const cells = getRowCells();
-            for (let i = 0; i < cells.length; i++) {
-                if (cells[i].getAttribute('data-id') === id) return { index: i, cells: cells };
+        function gridOpener(row) {
+            return row.querySelector('[data-colfield="id"] button');
+        }
+
+        // Remember which row opened a popup. This needs no knowledge of the
+        // popup's own contents, so it works for any list.
+        document.addEventListener('click', e => {
+            const t = e.target;
+            if (!t || !t.closest) return;
+            if (t.closest('.ui-popup-container')) return; // lists inside popups are not ours
+
+            // React grid: only the ID button opens the record
+            const gridRow = t.closest(GRID_ROW_SELECTOR);
+            if (gridRow && gridRow.getAttribute('data-row-id') !== 'header') {
+                if (t.closest('[data-colfield="id"]')) {
+                    ctx = { kind: 'grid', rowId: gridRow.getAttribute('data-row-id'), time: Date.now() };
+                }
+                return;
+            }
+
+            // Classic table: ignore the "..." menu except its View item
+            const tr = t.closest('tr');
+            if (!tr) return;
+            if (t.closest('.options-cell') && !t.closest('[data-srelement="View_Link"]')) return;
+            const cell = tr.querySelector(CELL_SELECTOR);
+            if (cell) ctx = { kind: 'td', el: cell, time: Date.now() };
+        }, true);
+
+        function findPopup() {
+            const popups = document.querySelectorAll('section.ui-popup-container');
+            for (let i = popups.length - 1; i >= 0; i--) {
+                if (popups[i].querySelector('.ui-btn-cancelpopup')) return popups[i];
             }
             return null;
+        }
+
+        // Returns { index, openers } for the list the current popup was opened from
+        function getPosition() {
+            if (!ctx) return null;
+            if (ctx.kind === 'td') {
+                if (!document.body.contains(ctx.el)) return null;
+                const table = ctx.el.closest('table');
+                if (!table) return null;
+                const controller = ctx.el.getAttribute('data-controller');
+                const openers = Array.prototype.filter.call(
+                    table.querySelectorAll(CELL_SELECTOR),
+                    c => c.getAttribute('data-controller') === controller
+                );
+                const index = openers.indexOf(ctx.el);
+                return index === -1 ? null : { index, openers };
+            }
+            // grid: re-query by row id because React may re-render the elements
+            const row = Array.prototype.filter.call(
+                document.querySelectorAll(GRID_ROW_SELECTOR),
+                r => r.getAttribute('data-row-id') === ctx.rowId
+            )[0];
+            const grid = row && row.closest('[role="grid"]');
+            if (!grid) return null;
+            const rows = gridRows(grid);
+            const index = rows.indexOf(row);
+            if (index === -1) return null;
+            return { index, openers: rows.map(gridOpener) };
         }
 
         function isEditing(popup) {
             const form = popup.querySelector('.js-form');
-            return !!form && form.getAttribute('data-editmode') === 'True';
+            if (form && form.getAttribute('data-editmode') === 'True') return true;
+            const header = popup.querySelector('.ui-popup-header');
+            return !!header && /^\s*(edit|new|add|delete)\b/i.test(header.textContent);
         }
 
         function removeUi() {
@@ -6907,33 +6961,37 @@
         function position() {
             if (!ui) return;
             const r = ui.popup.getBoundingClientRect();
-            const mid = r.top + r.height / 2;
+            // Popups are pinned to the top of the viewport, so use a fixed
+            // height instead of the popup's midpoint (which jumps with content)
+            const top = Math.min(BUTTON_TOP, Math.max(4, window.innerHeight - 70));
             ui.prev.style.left = Math.max(4, r.left - 54) + 'px';
-            ui.prev.style.top = (mid - 32) + 'px';
+            ui.prev.style.top = top + 'px';
             ui.next.style.left = Math.min(window.innerWidth - 48, r.right + 10) + 'px';
-            ui.next.style.top = (mid - 32) + 'px';
+            ui.next.style.top = top + 'px';
             ui.count.style.left = (r.left + r.width / 2 - 25) + 'px';
             ui.count.style.top = Math.max(4, r.top - 26) + 'px';
         }
 
         function buildUi(popup) {
-            const pos = getPosition(popup);
-            if (!pos) return;
+            if (!ctx || Date.now() - ctx.time > POPUP_MAX_DELAY_MS) return;
+            if (isEditing(popup)) return;
+            const pos = getPosition();
+            if (!pos || pos.openers.length < 2) return;
             removeUi();
-            const mk = (cls, text, title) => {
+            const mk = (title, text) => {
                 const b = document.createElement('button');
-                b.type = 'button'; b.className = cls; b.textContent = text; b.title = title;
+                b.type = 'button'; b.className = 'sw-record-nav-btn'; b.textContent = text; b.title = title;
                 document.body.appendChild(b);
                 return b;
             };
-            const prev = mk('sw-task-nav-btn', '‹', 'Previous task (←)');
-            const next = mk('sw-task-nav-btn', '›', 'Next task (→)');
+            const prev = mk('Previous (←)', '‹');
+            const next = mk('Next (→)', '›');
             const count = document.createElement('div');
-            count.className = 'sw-task-nav-count';
-            count.textContent = (pos.index + 1) + ' / ' + pos.cells.length;
+            count.className = 'sw-record-nav-count';
+            count.textContent = (pos.index + 1) + ' / ' + pos.openers.length;
             document.body.appendChild(count);
             prev.disabled = pos.index === 0;
-            next.disabled = pos.index === pos.cells.length - 1;
+            next.disabled = pos.index === pos.openers.length - 1;
             prev.addEventListener('click', () => navigate(-1));
             next.addEventListener('click', () => navigate(1));
             ui = { popup, prev, next, count };
@@ -6943,40 +7001,50 @@
         }
 
         function navigate(dir) {
-            if (busy) return;
-            const popup = findTaskPopup();
-            if (!popup || isEditing(popup)) return;
-            const pos = getPosition(popup);
+            if (busy || !ui) return;
+            const popup = ui.popup;
+            if (!document.body.contains(popup) || isEditing(popup)) return;
+            const pos = getPosition();
             if (!pos) return;
-            const target = pos.cells[pos.index + dir];
+            const target = pos.openers[pos.index + dir];
             if (!target) return;
+            const closeBtn = popup.querySelector('.ui-btn-cancelpopup');
+            if (!closeBtn) return;
 
             busy = true;
-            const closeBtn = popup.querySelector('.ui-btn-cancelpopup');
-            if (!closeBtn) { busy = false; return; }
+            pendingUntil = Date.now() + 8000;
+            removeUi();
             closeBtn.click();
 
-            // Wait for the old popup to leave the DOM, then open the next task
+            // Wait for the old popup to leave the DOM, then open the next record
             const started = Date.now();
             const poll = setInterval(() => {
-                const gone = !document.body.contains(popup);
-                if (gone || Date.now() - started > 2000) {
+                if (!document.body.contains(popup) || Date.now() - started > 2000) {
                     clearInterval(poll);
                     try {
-                        target.click();
+                        target.click(); // also updates ctx via the capture listener
                     } catch (e) {
-                        console.error('[StarWrench] Task navigator failed to open task:', e);
+                        console.error('[StarWrench] Record navigator failed to open record:', e);
                     }
-                    setTimeout(() => { busy = false; }, 150);
+                    setTimeout(() => { busy = false; sync(); }, 150);
                 }
             }, 30);
         }
 
         function sync() {
-            const popup = findTaskPopup();
-            if (!popup) { removeUi(); return; }
+            if (busy) return;
+            const popup = findPopup();
+            if (!popup) {
+                // Popup was closed: forget the row so an unrelated popup
+                // opened later doesn't inherit stale arrows
+                // (but not while waiting for the next record's popup to load)
+                if (ui && Date.now() > pendingUntil) ctx = null;
+                removeUi();
+                return;
+            }
             if (ui && ui.popup === popup) return;
             buildUi(popup);
+            if (ui) pendingUntil = 0;
         }
 
         let scheduled = false;
@@ -6999,8 +7067,7 @@
             navigate(e.key === 'ArrowLeft' ? -1 : 1);
         }, true);
 
-        sync();
-        console.log('[StarWrench] Task Navigator initialized');
+        console.log('[StarWrench] Record Navigator initialized');
     }
 
     // ================================
@@ -7053,8 +7120,9 @@
             case 'changeLogBlame':
                 initChangeLogBlamePlugin();
                 break;
-            case 'taskNavigator':
-                initTaskNavigatorPlugin();
+            case 'taskNavigator': // backwards compat — renamed to recordNavigator
+            case 'recordNavigator':
+                initRecordNavigatorPlugin();
                 break;
         }
     }
